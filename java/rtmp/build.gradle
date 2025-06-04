@@ -1,0 +1,65 @@
+plugins {
+    id("groovy") 
+    id("io.micronaut.application") version "4.5.3"
+    id("com.gradleup.shadow") version "8.3.6"
+    id("io.micronaut.aot") version "4.5.3"
+}
+
+version = "0.1"
+group = "com.nhochamvui.rtmp"
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("io.micronaut:micronaut-aop")
+    implementation("io.micronaut:micronaut-jackson-databind")
+    implementation("io.micronaut.groovy:micronaut-runtime-groovy")
+    implementation("io.micronaut.serde:micronaut-serde-jackson")
+    compileOnly("io.micronaut:micronaut-http-client")
+    compileOnly("io.micronaut:micronaut-http-validation")
+    compileOnly("io.micronaut.serde:micronaut-serde-processor")
+    runtimeOnly("ch.qos.logback:logback-classic")
+    testImplementation("io.micronaut:micronaut-http-client")
+}
+
+
+application {
+    mainClass = "com.nhochamvui.rtmp.Application"
+}
+java {
+    sourceCompatibility = JavaVersion.toVersion("21")
+    targetCompatibility = JavaVersion.toVersion("21")
+}
+
+
+graalvmNative.toolchainDetection = false
+
+micronaut {
+    runtime("netty")
+    testRuntime("spock2")
+    processing {
+        incremental(true)
+        annotations("com.nhochamvui.rtmp.*")
+    }
+    aot {
+        // Please review carefully the optimizations enabled below
+        // Check https://micronaut-projects.github.io/micronaut-aot/latest/guide/ for more details
+        optimizeServiceLoading = false
+        convertYamlToJava = false
+        precomputeOperations = true
+        cacheEnvironment = true
+        optimizeClassLoading = true
+        deduceEnvironment = true
+        optimizeNetty = true
+        replaceLogbackXml = true
+    }
+}
+
+
+tasks.named("dockerfileNative") {
+    jdkVersion = "21"
+}
+
+

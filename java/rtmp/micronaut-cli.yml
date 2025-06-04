@@ -1,0 +1,6 @@
+applicationType: default
+defaultPackage: com.nhochamvui.rtmp
+testFramework: spock
+sourceLanguage: groovy
+buildTool: gradle
+features: [app-name, github-workflow-ci, gradle, groovy, groovy-application, http-client-test, jackson-databind, logback, micronaut-aop, micronaut-aot, micronaut-build, micronaut-http-validation, netty-server, properties, readme, serialization-jackson, shade, spock, static-resources]
