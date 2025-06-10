@@ -1,6 +1,5 @@
 package com.nhochamvui.rtmp.core;
 
-import com.github.javaparser.utils.Log;
 import com.nhochamvui.rtmp.core.enums.ReadState;
 import com.nhochamvui.rtmp.core.models.Basic;
 import com.nhochamvui.rtmp.core.models.Message;
@@ -13,8 +12,10 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
@@ -56,6 +57,7 @@ public class Server {
                     handleChunkMessage(socket.getInputStream(), socket.getOutputStream());
 
                 } catch (Exception ex) {
+                    System.out.println("Exception while handle chunk message: " + ex);
                     break;
                 }
             }
@@ -85,6 +87,7 @@ public class Server {
             int maxLengthForCurrentChunkData = Math.min(header.message.length, clientMessageChunkSize);
             currentMessageData.put(inputStream.readNBytes(maxLengthForCurrentChunkData));
             if (!currentMessageData.hasRemaining()) {
+                currentMessageData.flip();
                 System.out.println("Finished chunk: " + header.basic.csid + ", message stream: " + header.message.streamId);
                 switch (header.message.typeId) {
                     case 1:
@@ -117,11 +120,51 @@ public class Server {
                         break;
                     case 20:
                         System.out.println("Process AMF0 Command message");
+                        List<Object> messages = new ArrayList<>();
+                        while (currentMessageData.hasRemaining()) {
+                            byte encodedType = currentMessageData.get();
+                            switch (encodedType) {
+                                case 0x02, 0x0C: //STRING, LONG STRING
+                                    int length;
+                                    if (encodedType == 0x02) {
+                                        length = currentMessageData.getShort();
+                                    } else {
+                                        length = currentMessageData.getInt();
+                                    }
+                                    messages.add(AMF0Decoder.getString(currentMessageData, length));
+                                    break;
+                                case 0x00: //NUMBER
+                                    messages.add(Double.longBitsToDouble(currentMessageData.getLong()));
+                                    break;
+                                case 0x08: //MAP
+                                case 0x03: //OBJECT
+                                    Map<String, Object> map = new HashMap<>();
+                                    int count = currentMessageData.getInt();
+                                    int i = 0;
+                                    byte[] endMarker = new byte[3];
+                                    break;
+                                case 0x01: //NUMBER
+                                    break;
+                                case 0x0A: //ARRAY
+                                    break;
+                                case 0x0B: //DATE
+                                    break;
+                                case 0x05: //NULL
+                                    break;
+                                case 0x06: //UNDEFINED
+                                    break;
+                                case 0x0D: //UNSUPPORTED
+                                    messages.add(null);
+                                    break;
+                            }
+                        }
                         break;
                 }
-                chunkPayload.remove(header.basic.csid);
             }
         }
+
+
+        chunkPayload.remove(header.basic.csid);
     }
 
     /**
