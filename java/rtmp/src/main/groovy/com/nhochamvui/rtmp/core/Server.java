@@ -1,9 +1,11 @@
 package com.nhochamvui.rtmp.core;
 
 import com.nhochamvui.rtmp.core.enums.ReadState;
+import com.nhochamvui.rtmp.core.models.AMF0Message;
 import com.nhochamvui.rtmp.core.models.Basic;
 import com.nhochamvui.rtmp.core.models.Message;
 import com.nhochamvui.rtmp.core.models.RTMPHeader;
+import groovy.lang.Tuple2;
 import groovy.util.logging.Slf4j;
 import jakarta.inject.Singleton;
 
@@ -15,6 +17,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -48,21 +51,24 @@ public class Server {
     public void listen() {
         try (ServerSocket serverSocket = new ServerSocket(1935, 50, InetAddress.getByName("127.0.0.1"))) {
             serverSocket.setReuseAddress(true);
-            System.out.println("RTMP server is listening on port 1935...");
-            Socket socket = serverSocket.accept();
 
-            handleHandShake(socket.getInputStream(), socket.getOutputStream());
             while (true) {
                 try {
-                    handleChunkMessage(socket.getInputStream(), socket.getOutputStream());
-
+                    System.out.println("RTMP server is listening on port 1935...");
+                    try (Socket socket = serverSocket.accept()) {
+                        handleHandShake(socket.getInputStream(), socket.getOutputStream());
+                        do {
+                            handleChunkMessage(socket.getInputStream(), socket.getOutputStream());
+                        } while (!socket.isClosed());
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
                 } catch (Exception ex) {
                     System.out.println("Exception while handle chunk message: " + ex);
+                    ex.printStackTrace();
                     break;
                 }
             }
-
-            socket.close();
         } catch (IOException e) {
             System.out.println("IOException: " + e.getMessage());
         }
@@ -122,49 +128,207 @@ public class Server {
                         System.out.println("Process AMF0 Command message");
                         List<Object> messages = new ArrayList<>();
                         while (currentMessageData.hasRemaining()) {
-                            byte encodedType = currentMessageData.get();
-                            switch (encodedType) {
-                                case 0x02, 0x0C: //STRING, LONG STRING
-                                    int length;
-                                    if (encodedType == 0x02) {
-                                        length = currentMessageData.getShort();
-                                    } else {
-                                        length = currentMessageData.getInt();
-                                    }
-                                    messages.add(AMF0Decoder.getString(currentMessageData, length));
-                                    break;
-                                case 0x00: //NUMBER
-                                    messages.add(Double.longBitsToDouble(currentMessageData.getLong()));
-                                    break;
-                                case 0x08: //MAP
-                                case 0x03: //OBJECT
-                                    Map<String, Object> map = new HashMap<>();
-                                    int count = currentMessageData.getInt();
-                                    int i = 0;
-                                    byte[] endMarker = new byte[3];
-                                    break;
-                                case 0x01: //NUMBER
-                                    break;
-                                case 0x0A: //ARRAY
-                                    break;
-                                case 0x0B: //DATE
-                                    break;
-                                case 0x05: //NULL
-                                    break;
-                                case 0x06: //UNDEFINED
-                                    break;
-                                case 0x0D: //UNSUPPORTED
-                                    messages.add(null);
-                                    break;
-                            }
+                            final Object message = decodeAMF0CommandMessage(currentMessageData);
+                            messages.add(message);
                         }
+                        System.out.println("Finished decoding AMF0 command message: " + messages);
+                        handleCommandMessage(messages, inputStream, outputStream);
                         break;
                 }
             }
         }
 
-
         chunkPayload.remove(header.basic.csid);
+    }
+
+    private void handleCommandMessage(List<Object> messages,
+                                      InputStream inputStream,
+                                      OutputStream outputStream) throws IOException {
+        if (messages.isEmpty()) {
+            System.out.println("Empty command message, exit.");
+            return;
+        }
+        String command = messages.getFirst().toString();
+        switch (command) {
+            case "connect":
+                if (messages.get(2) instanceof Map<?, ?> map) {
+                    String clientName = map.get("app").toString();
+                    System.out.println("Processing connect message for client: " + clientName);
+
+                    int encodeRequest = map.containsKey("objectEncoding") ?
+                            Integer.parseInt(map.get("objectEncoding").toString()) : 0; // should be 0 or 3
+                    if (encodeRequest == 3) {
+                        System.out.println("WARNING: AMF3 is not supported, exit.");
+                        return;
+                    }
+
+                    // send window ack size - 4 bytes
+                    final byte[] messageHeader = constructMessageHeader(1, 1);
+                    outputStream.write(ByteBuffer.allocate(4).putInt(5000000).array());
+
+                    // send peer bandwidth
+                    final ByteBuffer peerBandWidth = ByteBuffer.allocate(5);
+                    peerBandWidth.putInt(50000000);// SOFT
+                    peerBandWidth.put((byte) 2);
+                    outputStream.write(peerBandWidth.array());
+
+//                    // wait for window ack size, but OBS doesn't send!
+//                    while (inputStream.available() == 0) {
+//                        System.out.println("Waiting for window ack size...");
+//                    }
+
+                    // send command message (_result)
+                    List<Object> result = new ArrayList<>();
+                    result.add("_result");
+                    result.add(Double.parseDouble("1.0")); // transaction id
+                    result.add(new AMF0Message(new ArrayList<>(Arrays.asList(
+                                    new Tuple2<>("fmsVer", "FMS/3,0,1,123"),
+                                    new Tuple2<>("capabilities", 31)
+                            )))
+                    );
+                    result.add(new AMF0Message(new ArrayList<>(Arrays.asList(
+                                    new Tuple2<>("level", "status"),
+                                    new Tuple2<>("code", "NetConnection.Connect.Success"),
+                                    new Tuple2<>("description", "Connection succeeded"),
+                                    new Tuple2<>("objectEncoding", 0)
+                            )))
+                    );
+                    final byte[] resultCommandMessage = encodeAMF0CommandMessage(result);
+                    outputStream.write(resultCommandMessage);
+                }
+                System.out.println("Finished processing connect message");
+                break;
+            case "createStream":
+                System.out.println("Processing Create Stream message...");
+                break;
+            default:
+                System.out.println("Unknown command: " + command);
+                break;
+        }
+    }
+
+    private byte[] constructMessageHeader(int csID) {
+        return constructMessageHeader(csID, 0);
+    }
+
+    private byte[] constructMessageHeader(int csID, int fmt) {
+        byte[] basicHeader = new byte[2];
+        if(csID == 0){
+            basicHeader =
+        }
+    }
+
+    byte[] encodeAMF0CommandMessage(final List<Object> messages) {
+        ByteBuffer buffer = ByteBuffer.allocate(256);
+        if (messages.isEmpty()) {
+            System.out.println("Empty command message, exit.");
+            return new byte[0];
+        }
+
+        for (Object message : messages) {
+            switch (message) {
+                case Double doubleVal:
+                    buffer.put((byte) 0);
+                    buffer.putLong(Double.doubleToLongBits(doubleVal));
+                    break;
+                case String stringVal:
+                    buffer.put((byte) 2);
+                    buffer.put(encodeStringVal(stringVal));
+                    break;
+                case AMF0Message amf0Message:
+                    buffer.put((byte) 3);
+                    amf0Message.forEach((key, value) -> {
+                        buffer.put(encodeStringVal(key));
+                        if (value instanceof String) {
+                            buffer.put((byte) 2);
+                            buffer.put(encodeStringVal((String) value));
+                        } else if (value instanceof Integer) {
+                            buffer.put((byte) 0);
+                            buffer.putLong(Double.doubleToLongBits(Double.parseDouble(value.toString())));
+                        } else {
+                            System.out.println("Not supported value type");
+                            throw new RuntimeException("Not supported value type");
+                        }
+                    });
+                    buffer.put(AMF0Message.OBJECT_END_MARKER);
+                    break;
+                default:
+                    System.out.println("Not supported value type");
+                    break;
+            }
+        }
+
+        return buffer.array();
+    }
+
+    private byte[] encodeStringVal(String stringVal) {
+        byte[] stringValBytes = stringVal.getBytes();
+        ByteBuffer buffer = ByteBuffer.allocate(stringValBytes.length + 2);
+        buffer.putShort((short) stringValBytes.length);
+        buffer.put(stringValBytes);
+        return buffer.array();
+    }
+
+    Object decodeAMF0CommandMessage(ByteBuffer currentMessageData) {
+        int encodedType = Byte.toUnsignedInt(currentMessageData.get());
+        switch (encodedType) {
+            case 2, 0x0C: //STRING, LONG STRING
+                int length;
+                if (encodedType == 0x02) {
+                    length = currentMessageData.getShort();
+                } else {
+                    length = currentMessageData.getInt();
+                }
+                return AMF0Decoder.getString(currentMessageData, length);
+            case 0: //NUMBER
+                return Double.longBitsToDouble(currentMessageData.getLong());
+            case 0x08: // MAP
+            case 3: // OBJECT
+                Map<String, Object> map = new LinkedHashMap<>();
+                int count = 0;
+                if (encodedType == 0x08) {
+                    count = currentMessageData.getInt();
+                }
+                System.out.println("Process AMF3 Command message, count: " + count);
+                int i = 0;
+                final byte[] endMarker = new byte[3];
+                while (currentMessageData.hasRemaining()) {
+                    currentMessageData.get(currentMessageData.position(), endMarker);
+                    if (Arrays.equals(endMarker, AMF0Message.OBJECT_END_MARKER)) {
+                        currentMessageData.get(new byte[3]); // skip 3 bytes
+                        System.out.println("Finished reading for MAP/OBJECT data when reaching end marker");
+                        break;
+                    }
+                    if (count > 0 && i == count) {
+                        System.out.println("Finished reading for MAP/OBJECT data");
+                        break;
+                    }
+                    short propertySize = currentMessageData.getShort();
+                    byte[] keyArr = new byte[propertySize];
+                    currentMessageData.get(keyArr);
+                    String key = new String(keyArr);
+                    Object value = decodeAMF0CommandMessage(currentMessageData);
+                    map.put(key, value);
+                    i++;
+                }
+                return map;
+            case 0x01: //NUMBER
+                break;
+            case 0x0A: //ARRAY
+                break;
+            case 0x0B: //DATE
+                break;
+            case 0x05: //NULL
+                break;
+            case 0x06: //UNDEFINED
+                break;
+            case 0x0D: //UNSUPPORTED
+                return null;
+            default:
+                return null;
+        }
+
+        return null;
     }
 
     /**
