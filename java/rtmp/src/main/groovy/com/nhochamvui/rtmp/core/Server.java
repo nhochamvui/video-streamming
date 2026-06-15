@@ -446,9 +446,13 @@ public class Server {
         // S0 - version
         int s0 = determineVersion(c0);
 
-        // the first 4 bytes are timestamp (or 0) and next 4 bytes must be 0. The last bytes are random bytes
-        byte[] s1 = new byte[HANDSHAKE_LENGTH + 8];
-        System.arraycopy(generateRandomBytes(HANDSHAKE_LENGTH), 0, s1, 8, HANDSHAKE_LENGTH);
+        // S1: 1536 bytes total
+        // bytes 0-3: server timestamp (0)
+        // bytes 4-7: zero (simple handshake)
+        // bytes 8-1535: random data (1528 bytes)
+        byte[] s1 = new byte[HANDSHAKE_LENGTH];
+        byte[] randomData = generateRandomBytes(HANDSHAKE_LENGTH - 8);
+        System.arraycopy(randomData, 0, s1, 8, randomData.length);
 
         out.write(s0);
         out.write(s1);
