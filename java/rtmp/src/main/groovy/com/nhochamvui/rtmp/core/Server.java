@@ -345,7 +345,8 @@ public class Server {
     }
 
     /**
-     * Read and parse RTMP header (with basic header and message header) from input stream
+     * Read and parse RTMP header (with basic header and message header) from input
+     * stream
      *
      * @param inputStream
      * @return The RTMP header
@@ -364,21 +365,21 @@ public class Server {
 
         // 2 bytes header form
         if (csid == 0) {
-            csid = inputStream.readNBytes(1)[0] & MASK_OF_8_BITS + 64;
+            csid = (inputStream.readNBytes(1)[0] & MASK_OF_8_BITS) + 64;
         } else if (csid == 1) { // 3 bytes header form
             byte[] bytes = inputStream.readNBytes(2);
-            csid = (bytes[0] & MASK_OF_8_BITS + 64) + (bytes[1] & MASK_OF_8_BITS) << 8;
+            csid = ((bytes[0] & MASK_OF_8_BITS) + 64) + ((bytes[1] & MASK_OF_8_BITS) << 8);
         }
         basicHeader.csid = csid;
         System.out.println("Reading chunk " + basicHeader.csid);
 
         final Message message = rtmpHeader.message;
         switch (basicHeader.fmt) {
-            case 0: //11 bytes
+            case 0: // 11 bytes
                 message.timestamp = readIntFrom3Bytes(inputStream);
                 message.length = readIntFrom3Bytes(inputStream);
                 message.typeId = inputStream.read();
-                message.streamId = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
+                message.streamId = ByteBuffer.wrap(inputStream.readNBytes(4)).order(ByteOrder.LITTLE_ENDIAN).getInt();
                 break;
             case 1: // 7 bytes
                 message.timestampDelta = readIntFrom3Bytes(inputStream);
