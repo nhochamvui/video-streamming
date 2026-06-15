@@ -51,15 +51,28 @@ public class Server {
     public void listen() {
         try (ServerSocket serverSocket = new ServerSocket(1935, 50, InetAddress.getByName("127.0.0.1"))) {
             serverSocket.setReuseAddress(true);
-
             while (true) {
                 try {
                     System.out.println("RTMP server is listening on port 1935...");
                     try (Socket socket = serverSocket.accept()) {
+                        socket.setTcpNoDelay(true);
+                        this.connectionStartTime = System.currentTimeMillis();
                         handleHandShake(socket.getInputStream(), socket.getOutputStream());
-                        do {
-                            handleChunkMessage(socket.getInputStream(), socket.getOutputStream());
-                        } while (!socket.isClosed());
+                        InputStream inputStream = socket.getInputStream();
+                        OutputStream outputStream = socket.getOutputStream();
+
+                        while (!socket.isClosed()) {
+                            if (inputStream.available() > 0) {
+                                handleChunkMessage(inputStream, outputStream);
+                            } else {
+                                try {
+                                    Thread.sleep(10);
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
+                        }
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
