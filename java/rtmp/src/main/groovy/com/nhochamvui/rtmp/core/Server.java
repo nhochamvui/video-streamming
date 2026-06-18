@@ -1,5 +1,6 @@
 package com.nhochamvui.rtmp.core;
 
+import com.nhochamvui.rtmp.core.enums.AMF0Type;
 import com.nhochamvui.rtmp.core.enums.ReadState;
 import com.nhochamvui.rtmp.core.models.AMF0Message;
 import com.nhochamvui.rtmp.core.models.Basic;
@@ -7,6 +8,8 @@ import com.nhochamvui.rtmp.core.models.Message;
 import com.nhochamvui.rtmp.core.models.RTMPHeader;
 import groovy.lang.Tuple2;
 import groovy.util.logging.Slf4j;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import jakarta.inject.Singleton;
 
 import java.io.*;
@@ -14,6 +17,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -22,8 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-import static com.nhochamvui.rtmp.core.constants.Constant.MASK_OF_6_BITS;
-import static com.nhochamvui.rtmp.core.constants.Constant.MASK_OF_8_BITS;
+import static com.nhochamvui.rtmp.core.constants.Constant.*;
+
 
 @Singleton
 @Slf4j
@@ -36,7 +40,10 @@ public class Server {
     private static final Random randomSeed = new Random();
 
     private ReadState readState;
-    private int clientMessageChunkSize = 128;
+    private int inChunkSize = 128;
+    private int outChunkSize = 128;
+    private long connectionStartTime;
+    private int nextStreamId = 1;
 
     /**
      * Contains previous headers grouped by chunk stream ID
@@ -57,9 +64,9 @@ public class Server {
                     try (Socket socket = serverSocket.accept()) {
                         socket.setTcpNoDelay(true);
                         this.connectionStartTime = System.currentTimeMillis();
-                        handleHandShake(socket.getInputStream(), socket.getOutputStream());
                         InputStream inputStream = socket.getInputStream();
                         OutputStream outputStream = socket.getOutputStream();
+                        handleHandShake(inputStream, outputStream);
 
                         while (!socket.isClosed()) {
                             if (inputStream.available() > 0) {
@@ -97,21 +104,24 @@ public class Server {
     private void handleChunkMessage(InputStream inputStream, OutputStream outputStream) throws IOException {
         final RTMPHeader header = readRTMPHeader(inputStream);
         prevHeaders.put(header.basic.csid, header);
-        chunkPayload.putIfAbsent(
-                header.basic.csid, ByteBuffer.allocateDirect(header.message.length)
-        );
+        chunkPayload.putIfAbsent(header.basic.csid, ByteBuffer.allocateDirect(header.message.length));
         ByteBuffer currentMessageData = chunkPayload.get(header.basic.csid);
         assert currentMessageData != null;
         if (currentMessageData.hasRemaining()) {
-            int maxLengthForCurrentChunkData = Math.min(header.message.length, clientMessageChunkSize);
+            int maxLengthForCurrentChunkData = Math.min(currentMessageData.remaining(), inChunkSize);
             currentMessageData.put(inputStream.readNBytes(maxLengthForCurrentChunkData));
             if (!currentMessageData.hasRemaining()) {
                 currentMessageData.flip();
-                System.out.println("Finished chunk: " + header.basic.csid + ", message stream: " + header.message.streamId);
+                System.out.println(
+                        "Finished chunk: " + header.basic.csid + ", message stream: " + header.message.streamId);
+
+                chunkPayload.remove(header.basic.csid);
+
                 switch (header.message.typeId) {
                     case 1:
-                        this.clientMessageChunkSize = currentMessageData.getInt(0);
-                        System.out.println("Process SetChunkSize message, new chunk size: " + this.clientMessageChunkSize);
+                        this.inChunkSize = currentMessageData.getInt(0);
+                        System.out.println(
+                                "Process SetChunkSize message, new inChunkSize: " + this.inChunkSize);
                         break;
                     case 2:
                         System.out.println("Process AbortMessage message");
@@ -145,69 +155,62 @@ public class Server {
                             messages.add(message);
                         }
                         System.out.println("Finished decoding AMF0 command message: " + messages);
-                        handleCommandMessage(messages, inputStream, outputStream);
+                        String commandName = messages.isEmpty() ? "UNKNOWN" : messages.getFirst().toString();
+                        System.out.println(">>> Received command: " + commandName);
+                        handleCommandMessage(messages, header.message.streamId, inputStream, outputStream);
                         break;
                 }
             }
         }
-
-        chunkPayload.remove(header.basic.csid);
     }
 
     private void handleCommandMessage(List<Object> messages,
-                                      InputStream inputStream,
-                                      OutputStream outputStream) throws IOException {
+            int messageStreamId,
+            InputStream inputStream,
+            OutputStream outputStream) throws IOException {
         if (messages.isEmpty()) {
             System.out.println("Empty command message, exit.");
             return;
         }
         String command = messages.getFirst().toString();
+        System.out.println(">>> Handling command: " + command + " on stream " + messageStreamId);
         switch (command) {
             case "connect":
                 if (messages.get(2) instanceof Map<?, ?> map) {
                     String clientName = map.get("app").toString();
                     System.out.println("Processing connect message for client: " + clientName);
 
-                    int encodeRequest = map.containsKey("objectEncoding") ?
-                            Integer.parseInt(map.get("objectEncoding").toString()) : 0; // should be 0 or 3
+                    int encodeRequest = map.containsKey("objectEncoding")
+                            ? Integer.parseInt(map.get("objectEncoding").toString())
+                            : 0;
                     if (encodeRequest == 3) {
                         System.out.println("WARNING: AMF3 is not supported, exit.");
                         return;
                     }
 
-                    // send window ack size - 4 bytes
-                    final byte[] messageHeader = constructMessageHeader(1, 1);
-                    outputStream.write(ByteBuffer.allocate(4).putInt(5000000).array());
+                    this.outChunkSize = 5000;
+                    sendWindowAckSize(outputStream, 5000000);
+                    sendSetPeerBandwidth(outputStream, 5000000, 2);
+                    sendSetChunkSize(outputStream, this.outChunkSize);
 
-                    // send peer bandwidth
-                    final ByteBuffer peerBandWidth = ByteBuffer.allocate(5);
-                    peerBandWidth.putInt(50000000);// SOFT
-                    peerBandWidth.put((byte) 2);
-                    outputStream.write(peerBandWidth.array());
-
-//                    // wait for window ack size, but OBS doesn't send!
-//                    while (inputStream.available() == 0) {
-//                        System.out.println("Waiting for window ack size...");
-//                    }
-
-                    // send command message (_result)
-                    List<Object> result = new ArrayList<>();
-                    result.add("_result");
-                    result.add(Double.parseDouble("1.0")); // transaction id
-                    result.add(new AMF0Message(new ArrayList<>(Arrays.asList(
-                                    new Tuple2<>("fmsVer", "FMS/3,0,1,123"),
-                                    new Tuple2<>("capabilities", 31)
-                            )))
-                    );
-                    result.add(new AMF0Message(new ArrayList<>(Arrays.asList(
-                                    new Tuple2<>("level", "status"),
-                                    new Tuple2<>("code", "NetConnection.Connect.Success"),
-                                    new Tuple2<>("description", "Connection succeeded"),
-                                    new Tuple2<>("objectEncoding", 0)
-                            )))
-                    );
-                    final byte[] resultCommandMessage = encodeAMF0CommandMessage(result);
+                    List<Object> responseBody = new ArrayList<>();
+                    responseBody.add("_result");
+                    responseBody.add(1); // transaction id always = 1
+                    responseBody.add(new AMF0Message(new ArrayList<>(Arrays.asList(
+                            new Tuple2<>("fmsVer", "FMS/3,0,1,123"),
+                            new Tuple2<>("capabilities", 31)))));
+                    responseBody.add(new AMF0Message(new ArrayList<>(Arrays.asList(
+                            new Tuple2<>("level", "status"),
+                            new Tuple2<>("code", "NetConnection.Connect.Success"),
+                            new Tuple2<>("description", "Connection succeeded"),
+                            new Tuple2<>("objectEncoding", 0)))));
+                    final byte[] resultCommandMessage = encodeAMF0CommandMessage(responseBody, 0);
+                    System.out.println("before sending result: " + inputStream.available());
                     outputStream.write(resultCommandMessage);
+                    System.out.println("Result message bytes: " + resultCommandMessage.length + " bytes");
+                    System.out.println("Result hex: " + bytesToHex(resultCommandMessage));
+
+                    outputStream.flush();
                 }
                 System.out.println("Finished processing connect message");
                 break;
@@ -225,67 +228,226 @@ public class Server {
     }
 
     private byte[] constructMessageHeader(int csID, int fmt) {
-        byte[] basicHeader = new byte[2];
-        if(csID == 0){
-            basicHeader =
-        }
+        ByteBuf buffer = Unpooled.buffer();
+
+        return buffer.array();
     }
 
-    byte[] encodeAMF0CommandMessage(final List<Object> messages) {
-        ByteBuffer buffer = ByteBuffer.allocate(256);
+    /**
+     * Send Set Peer Bandwidth message (Type 6)
+     * This sets the bandwidth limit for the peer
+     * @param limitType
+     * 0 — Hard: The peer must strictly limit its output bandwidth.
+     * 1 — Soft: The peer can limit its bandwidth, or use the window size already in effect, whichever is smaller.
+     * 2 — Dynamic: If the previous limit was Hard, treat this as Hard. Otherwise, ignore it.
+     */
+    private void sendSetPeerBandwidth(OutputStream out, int bandwidth, int limitType) throws IOException {
+        ByteBuf buffer = Unpooled.buffer();
+
+        // Basic Header: fmt=0, csid=2
+        buffer.writeByte(0x02);
+
+        // Message Header (11 bytes for fmt 0)
+        buffer.writeMedium((int) (System.currentTimeMillis() - connectionStartTime));
+        buffer.writeMedium(5); // message length = 5 bytes
+        buffer.writeByte(6); // message type = Set Peer Bandwidth
+        buffer.writeIntLE(0); // stream ID = 0 (protocol control)
+
+        // Payload (5 bytes)
+        buffer.writeInt(bandwidth);
+        buffer.writeByte((byte) limitType);
+
+        // Write to output stream
+        byte[] data = new byte[buffer.readableBytes()];
+        buffer.readBytes(data);
+        out.write(data);
+        out.flush();
+
+        buffer.release();
+        System.out.println("Sent Set Peer Bandwidth: " + bandwidth + ", type: " + limitType);
+        System.out.println("Set Peer Bandwidth bytes: " + data.length + " bytes");
+        System.out.println("Set Peer Bandwidth hex: " + bytesToHex(data));
+    }
+
+    private void sendWindowAckSize(OutputStream out, int windowSize) throws IOException {
+        ByteBuf buffer = Unpooled.buffer();
+
+        // Basic Header: fmt=0, cs id = 2
+        buffer.writeByte(0x02);
+
+        // Message Header (11 bytes for fmt 0)
+        buffer.writeMedium((int) (System.currentTimeMillis() - connectionStartTime)); // 3 bytes for timestamp
+        buffer.writeMedium(4); // message length = 4 bytes
+        buffer.writeByte(5); // message type = Window Ack Size
+        buffer.writeIntLE(0); // stream ID = 0 (protocol control)
+
+        // Payload (4 bytes)
+        buffer.writeInt(windowSize);
+
+        // Write to output stream
+        byte[] data = new byte[buffer.readableBytes()];
+        buffer.readBytes(data);
+        out.write(data);
+        out.flush();
+
+        buffer.release();
+        System.out.println("Sent Window Ack Size: " + windowSize);
+        System.out.println("Window Ack bytes: " + data.length + " bytes");
+        System.out.println("Window Ack hex: " + bytesToHex(data));
+    }
+
+    private void sendSetChunkSize(OutputStream outputStream, int chunkSize) throws IOException {
+        ByteBuf buffer = Unpooled.buffer();
+
+        // Basic Header: fmt=0, csid=2
+        buffer.writeByte(0x02);
+
+        // Message Header (11 bytes for fmt 0)
+        buffer.writeMedium((int) (System.currentTimeMillis() - connectionStartTime));
+        buffer.writeMedium(4); // message length = 4 bytes
+        buffer.writeByte(1); // message type = set chunk size
+        buffer.writeIntLE(0); // stream ID = 0 (protocol control)
+
+        // Payload (4 bytes)
+        buffer.writeInt(chunkSize);
+
+        // Write to output stream
+        byte[] data = new byte[buffer.readableBytes()];
+        buffer.readBytes(data);
+        outputStream.write(data);
+        outputStream.flush();
+
+        buffer.release();
+        System.out.println("Sent set chunk size message: " + chunkSize);
+        System.out.println("set chunk size message bytes: " + data.length + " bytes");
+        System.out.println("set chunk size message hex: " + bytesToHex(data));
+    }
+
+    byte[] encodeAMF0CommandMessage(final List<Object> messages, int streamId) throws IOException {
+        ByteBuf buffer = Unpooled.buffer();
         if (messages.isEmpty()) {
             System.out.println("Empty command message, exit.");
             return new byte[0];
         }
 
-        for (Object message : messages) {
-            switch (message) {
-                case Double doubleVal:
-                    buffer.put((byte) 0);
-                    buffer.putLong(Double.doubleToLongBits(doubleVal));
-                    break;
-                case String stringVal:
-                    buffer.put((byte) 2);
-                    buffer.put(encodeStringVal(stringVal));
-                    break;
-                case AMF0Message amf0Message:
-                    buffer.put((byte) 3);
-                    amf0Message.forEach((key, value) -> {
-                        buffer.put(encodeStringVal(key));
-                        if (value instanceof String) {
-                            buffer.put((byte) 2);
-                            buffer.put(encodeStringVal((String) value));
-                        } else if (value instanceof Integer) {
-                            buffer.put((byte) 0);
-                            buffer.putLong(Double.doubleToLongBits(Double.parseDouble(value.toString())));
-                        } else {
-                            System.out.println("Not supported value type");
-                            throw new RuntimeException("Not supported value type");
-                        }
-                    });
-                    buffer.put(AMF0Message.OBJECT_END_MARKER);
-                    break;
-                default:
-                    System.out.println("Not supported value type");
-                    break;
-            }
+        // header: any value other than 0, 1, 2 for command message
+        int csid = 3;
+        byte[] basicHeader = encodeBasicHeader(0, csid);
+        buffer.writeBytes(basicHeader);
+        long timestamp = System.currentTimeMillis() - connectionStartTime;
+        int maxTimestamp = 0xFFFFFF;
+        boolean needExtraTime = false;
+        if (timestamp >= maxTimestamp) {
+            needExtraTime = true;
+            buffer.writeMedium(maxTimestamp);
+        } else {
+            buffer.writeMedium((int) timestamp);
         }
 
-        return buffer.array();
+        // payload
+        ByteBuf encodedPayload = encodeRTMPCommandMessagePayload(messages);
+
+        //message header
+        buffer.writeMedium(encodedPayload.readableBytes()); // message length
+        buffer.writeByte(MSG_TYPE_COMMAND_AMF0); // message type
+        buffer.writeIntLE(streamId); // message stream id
+
+        if (needExtraTime) {
+            buffer.writeInt((int) timestamp);
+        }
+
+        ByteBuf completeMessage = Unpooled.buffer();
+
+        boolean fmt0Part = true;
+        while (encodedPayload.isReadable()) {
+            int min = Math.min(outChunkSize, encodedPayload.readableBytes());
+            if (fmt0Part) {
+                buffer.writeBytes(encodedPayload, min);
+                fmt0Part = false;
+            } else {
+                byte[] fmt3BasicHeader = encodeBasicHeader(CHUNK_FMT_3, csid);
+                buffer.writeBytes(fmt3BasicHeader);
+                buffer.writeBytes(encodedPayload, min);
+            }
+            completeMessage.writeBytes(buffer, buffer.readerIndex(), buffer.readableBytes());
+            buffer.release();
+            buffer = Unpooled.buffer();
+        }
+        encodedPayload.release();
+        byte[] result = new byte[completeMessage.readableBytes()];
+        completeMessage.readBytes(result);
+        completeMessage.release();
+        return result;
     }
 
-    private byte[] encodeStringVal(String stringVal) {
+    private static ByteBuf encodeRTMPCommandMessagePayload(final List<Object> messages) {
+        ByteBuf byteBuffer = Unpooled.buffer();
+        for (Object message : messages) {
+            byteBuffer.writeBytes(encodeMessage(message));
+        }
+
+        return byteBuffer;
+    }
+
+    private static ByteBuf encodeMessage(final Object message) {
+        System.out.println("Encoding: " + message + " type: " + (message != null ? message.getClass() : "null"));
+        ByteBuf byteBuffer = Unpooled.buffer();
+        if (message == null) {
+            byteBuffer.writeByte((byte) 0x05);
+            return byteBuffer;
+        }
+        switch (message) {
+            case Number numVal:
+                byteBuffer.writeByte((byte) AMF0Type.NUMBER.value);
+                byteBuffer.writeLong(Double.doubleToLongBits(Double.parseDouble(numVal.toString())));
+                break;
+            case String stringVal:
+                byteBuffer.writeByte((byte) AMF0Type.STRING.value);
+                byteBuffer.writeBytes(encodeStringVal(stringVal));
+                break;
+            case Map<?, ?> mapVal:
+                byteBuffer.writeByte((byte) AMF0Type.OBJECT.value);
+                mapVal.forEach((key, value) -> {
+                    byteBuffer.writeBytes(encodeStringVal(key.toString()));
+                    byteBuffer.writeBytes(encodeMessage(value));
+                });
+                byteBuffer.writeBytes(AMF0Message.OBJECT_END_MARKER);
+                break;
+            default:
+                System.out.println("Not supported value type: " + message.getClass());
+                break;
+        }
+        return byteBuffer;
+    }
+
+    private static byte[] encodeBasicHeader(final int fmt, final int csid) {
+        if (csid >= 2 && csid <= 63) {
+            return new byte[] { (byte) ((fmt << 6) + csid) };
+        } else if (csid >= 64 && csid <= 319) {
+            return new byte[] { (byte) (fmt << 6), (byte) (csid - 64) };
+        } else {
+            // little Endian
+            return new byte[] { (byte) ((fmt << 6) | 1), (byte) ((csid - 64) & 0xff), (byte) ((csid - 64) >> 8) };
+        }
+    }
+
+    
+    // Only supports AMF0 short strings (type 0x02, max 65535 bytes).
+    // Strings longer than 65535 bytes are truncated to 65535 bytes.
+    // Full support would need LONG_STRING (type 0x0C) with a 4-byte length prefix.
+    private static byte[] encodeStringVal(String stringVal) {
         byte[] stringValBytes = stringVal.getBytes();
-        ByteBuffer buffer = ByteBuffer.allocate(stringValBytes.length + 2);
-        buffer.putShort((short) stringValBytes.length);
-        buffer.put(stringValBytes);
+        int length = Math.min(stringValBytes.length, 65535);
+        ByteBuffer buffer = ByteBuffer.allocate(length + 2);
+        buffer.putShort((short) length);
+        buffer.put(stringValBytes, 0, length);
         return buffer.array();
     }
 
     Object decodeAMF0CommandMessage(ByteBuffer currentMessageData) {
         int encodedType = Byte.toUnsignedInt(currentMessageData.get());
         switch (encodedType) {
-            case 2, 0x0C: //STRING, LONG STRING
+            case 0x02, 0x0C: // STRING, LONG STRING
                 int length;
                 if (encodedType == 0x02) {
                     length = currentMessageData.getShort();
@@ -293,7 +455,7 @@ public class Server {
                     length = currentMessageData.getInt();
                 }
                 return AMF0Decoder.getString(currentMessageData, length);
-            case 0: //NUMBER
+            case 0: // NUMBER
                 return Double.longBitsToDouble(currentMessageData.getLong());
             case 0x08: // MAP
             case 3: // OBJECT
@@ -325,17 +487,17 @@ public class Server {
                     i++;
                 }
                 return map;
-            case 0x01: //NUMBER
+            case 0x01: // NUMBER
                 break;
-            case 0x0A: //ARRAY
+            case 0x0A: // ARRAY
                 break;
-            case 0x0B: //DATE
+            case 0x0B: // DATE
                 break;
-            case 0x05: //NULL
+            case 0x05: // NULL
                 break;
-            case 0x06: //UNDEFINED
+            case 0x06: // UNDEFINED
                 break;
-            case 0x0D: //UNSUPPORTED
+            case 0x0D: // UNSUPPORTED
                 return null;
             default:
                 return null;
@@ -427,7 +589,7 @@ public class Server {
         byte[] c1RandBytes = Arrays.copyOfRange(c1, 8, c1.length);
         byte[] s2 = new byte[HANDSHAKE_LENGTH];
         System.arraycopy(c1Time, 0, s2, 0, c1Time.length);
-        //TODO: should fill C1 reception timestamp from 4 to 7 index
+        // TODO: should fill C1 reception timestamp from 4 to 7 index
         System.arraycopy(c1RandBytes, 0, s2, 8, c1RandBytes.length);
         out.write(s2);
     }
@@ -500,4 +662,3 @@ public class Server {
         return ByteBuffer.wrap(fourBytes).getInt();
     }
 }
-
