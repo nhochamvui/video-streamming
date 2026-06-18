@@ -213,8 +213,75 @@ public class Server {
                 }
                 System.out.println("Finished processing connect message");
                 break;
+
+            case "releaseStream":
+                System.out.println("Processing releaseStream...");
+                {
+                    double txId = messages.size() > 1 && messages.get(1) instanceof Number
+                            ? ((Number) messages.get(1)).doubleValue() : 0;
+                    List<Object> response = Arrays.asList("_result", txId, null);
+                    byte[] data = encodeAMF0CommandMessage(response, 0);
+                    outputStream.write(data);
+                    outputStream.flush();
+                }
+                break;
+
+            case "FCPublish":
+                System.out.println("Processing FCPublish...");
+                {
+                    double txId = messages.size() > 1 && messages.get(1) instanceof Number
+                            ? ((Number) messages.get(1)).doubleValue() : 0;
+                    List<Object> response = Arrays.asList("_result", txId, null);
+                    byte[] data = encodeAMF0CommandMessage(response, 0);
+                    outputStream.write(data);
+                    outputStream.flush();
+                }
+                break;
+
+            case "FCUnpublish":
+                System.out.println("Processing FCUnpublish...");
+                {
+                    double txId = messages.size() > 1 && messages.get(1) instanceof Number
+                            ? ((Number) messages.get(1)).doubleValue() : 0;
+                    List<Object> response = Arrays.asList("_result", txId, null);
+                    byte[] data = encodeAMF0CommandMessage(response, 0);
+                    outputStream.write(data);
+                    outputStream.flush();
+                }
+                break;
+
             case "createStream":
-                System.out.println("Processing Create Stream message...");
+                System.out.println("Processing createStream...");
+                {
+                    double txId = messages.size() > 1 && messages.get(1) instanceof Number
+                            ? ((Number) messages.get(1)).doubleValue() : 0;
+                    int newStreamId = nextStreamId++;
+                    System.out.println("Allocated stream ID: " + newStreamId);
+                    List<Object> response = Arrays.asList("_result", txId, null, (double) newStreamId);
+                    byte[] data = encodeAMF0CommandMessage(response, 0);
+                    outputStream.write(data);
+                    outputStream.flush();
+                }
+                break;
+
+            case "publish":
+                System.out.println("Processing publish...");
+                {
+                    String streamName = messages.size() > 3 && messages.get(3) != null
+                            ? messages.get(3).toString() : "stream";
+                    String streamType = messages.size() > 4 && messages.get(4) != null
+                            ? messages.get(4).toString() : "live";
+                    System.out.println("Stream: " + streamName + ", type: " + streamType);
+
+                    Map<String, Object> info = new LinkedHashMap<>();
+                    info.put("level", "status");
+                    info.put("code", "NetStream.Publish.Start");
+                    info.put("description", "Stream is now published");
+                    List<Object> statusResult = Arrays.asList("onStatus", (double) 0, null, info);
+                    byte[] data = encodeAMF0CommandMessage(statusResult, messageStreamId);
+                    outputStream.write(data);
+                    outputStream.flush();
+                }
                 break;
             default:
                 System.out.println("Unknown command: " + command);
