@@ -208,7 +208,6 @@ public class Server {
                     System.out.println("before sending result: " + inputStream.available());
                     outputStream.write(resultCommandMessage);
                     System.out.println("Result message bytes: " + resultCommandMessage.length + " bytes");
-                    System.out.println("Result hex: " + bytesToHex(resultCommandMessage));
 
                     outputStream.flush();
                 }
@@ -266,7 +265,6 @@ public class Server {
         buffer.release();
         System.out.println("Sent Set Peer Bandwidth: " + bandwidth + ", type: " + limitType);
         System.out.println("Set Peer Bandwidth bytes: " + data.length + " bytes");
-        System.out.println("Set Peer Bandwidth hex: " + bytesToHex(data));
     }
 
     private void sendWindowAckSize(OutputStream out, int windowSize) throws IOException {
@@ -293,7 +291,6 @@ public class Server {
         buffer.release();
         System.out.println("Sent Window Ack Size: " + windowSize);
         System.out.println("Window Ack bytes: " + data.length + " bytes");
-        System.out.println("Window Ack hex: " + bytesToHex(data));
     }
 
     private void sendSetChunkSize(OutputStream outputStream, int chunkSize) throws IOException {
@@ -320,7 +317,6 @@ public class Server {
         buffer.release();
         System.out.println("Sent set chunk size message: " + chunkSize);
         System.out.println("set chunk size message bytes: " + data.length + " bytes");
-        System.out.println("set chunk size message hex: " + bytesToHex(data));
     }
 
     byte[] encodeAMF0CommandMessage(final List<Object> messages, int streamId) throws IOException {
