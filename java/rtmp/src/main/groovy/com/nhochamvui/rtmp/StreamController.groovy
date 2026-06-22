@@ -24,7 +24,11 @@ class StreamController {
     <script>
         var video = document.getElementById('v');
         if (Hls.isSupported()) {
-            var hls = new Hls();
+            var hls = new Hls({
+                liveSyncDurationCount: 3,
+                maxBufferLength: 10,
+                maxMaxBufferLength: 15
+            });
             hls.loadSource('/hls/output.m3u8');
             hls.attachMedia(video);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {

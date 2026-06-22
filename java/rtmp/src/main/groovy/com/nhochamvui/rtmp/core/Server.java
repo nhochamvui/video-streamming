@@ -58,7 +58,7 @@ public class Server {
     private final Map<Integer, ByteBuffer> chunkPayload = new HashMap<>();
 
     public void listen() {
-        try (ServerSocket serverSocket = new ServerSocket(1935, 50, InetAddress.getByName("127.0.0.1"))) {
+        try (ServerSocket serverSocket = new ServerSocket(1935, 50, InetAddress.getByName("0.0.0.0"))) {
             serverSocket.setReuseAddress(true);
             while (true) {
                 try {
@@ -107,11 +107,12 @@ public class Server {
     List<String> command = List.of("ffmpeg",
             "-f", "flv", "-i", "pipe:0",
             "-c", "copy",
-            "-f", "segment", "-segment_time", "2",
+            "-f", "segment", "-segment_time", "1",
             "-segment_format", "mpegts",
             "-segment_list_type", "m3u8",
             "-segment_list", "hls/output.m3u8",
-            "-segment_list_size", "5",
+            "-segment_list_size", "10",
+            "-segment_wrap", "12",
             "-segment_list_flags", "live",
             "-break_non_keyframes", "1",
             "hls/output_%d.ts");
