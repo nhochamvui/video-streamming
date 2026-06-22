@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.Random;
 
 import static com.nhochamvui.rtmp.core.constants.Constant.*;
+import static com.nhochamvui.rtmp.core.functions.MediaHandler.createFlvHeader;
+import static com.nhochamvui.rtmp.core.functions.MediaHandler.writeFlvTag;
 
 
 @Singleton
@@ -80,6 +82,14 @@ public class Server {
                                 }
                             }
                         }
+
+                        if (process != null) {
+                            process.getOutputStream().close();
+                            process.waitFor();
+                            System.out.println("FFmpeg process finished with exit code: " + process.exitValue());
+                            process = null;
+                            sentFlvHeader = false;
+                        }
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
@@ -93,6 +103,21 @@ public class Server {
             System.out.println("IOException: " + e.getMessage());
         }
     }
+
+    List<String> command = List.of("ffmpeg",
+            "-f", "flv", "-i", "pipe:0",
+            "-c", "copy",
+            "-f", "segment", "-segment_time", "2",
+            "-segment_format", "mpegts",
+            "-segment_list_type", "m3u8",
+            "-segment_list", "hls/output.m3u8",
+            "-segment_list_size", "5",
+            "-segment_list_flags", "live",
+            "-break_non_keyframes", "1",
+            "hls/output_%d.ts");
+    ProcessBuilder processBuilder = new ProcessBuilder(command);
+    Process process = null;
+    boolean sentFlvHeader = false;
 
     /**
      * Handle reading a chunk message
@@ -116,7 +141,7 @@ public class Server {
                         "Finished chunk: " + header.basic.csid + ", message stream: " + header.message.streamId);
 
                 chunkPayload.remove(header.basic.csid);
-
+                List<Object> messages = new ArrayList<>();
                 switch (header.message.typeId) {
                     case 1:
                         this.inChunkSize = currentMessageData.getInt(0);
@@ -139,17 +164,58 @@ public class Server {
                         System.out.println("Process Set Peer Bandwidth message");
                         break;
                     case 8:
-                        System.out.println("Process Audio message");
-                        break;
                     case 9:
-                        System.out.println("Process Video message");
+                        System.out.println("Process typeId: " + header.message.typeId + " message");
+                        byte[] payload = new byte[currentMessageData.remaining()];
+                        currentMessageData.get(0, payload);
+
+                        if (process == null){
+                            new File("hls").mkdirs();
+                            processBuilder.redirectErrorStream(true);
+                            process = processBuilder.start();
+
+                            Thread.ofVirtual().start(() -> {
+                                try {
+                                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                                            new java.io.InputStreamReader(process.getInputStream()));
+                                    String line;
+                                    while ((line = reader.readLine()) != null) {
+                                        System.out.println("[ffmpeg] " + line);
+                                    }
+                                } catch (IOException ignored) { }
+                            });
+                        }
+
+                        if (!process.isAlive()) {
+                            String error = new String(process.getErrorStream().readAllBytes());
+                            System.out.println("FFmpeg exited: " + process.exitValue() + ", error: " + error);
+                            sentFlvHeader = false;
+                            process = null;
+                            break;
+                        }
+
+                        if (header.message.typeId == 9 && !sentFlvHeader) {
+                            if (payload.length < 2 || (payload[1] & 0xFF) != 0) {
+                                System.out.println("Skip first video frame: not a sequence header");
+                                break;
+                            }
+                        }
+
+                        if (!sentFlvHeader){
+                            sentFlvHeader = true;
+                            process.getOutputStream().write(createFlvHeader());
+                        }
+
+                        writeFlvTag(process.getOutputStream(), (byte)header.message.typeId, header.message.timestamp, payload);
                         break;
                     case 15:
                         System.out.println("Process AMF3 Command message");
                         break;
+                    case 18:
+                        System.out.println("Process metadata message");
+                        break;
                     case 20:
                         System.out.println("Process AMF0 Command message");
-                        List<Object> messages = new ArrayList<>();
                         while (currentMessageData.hasRemaining()) {
                             final Object message = decodeAMF0CommandMessage(currentMessageData);
                             messages.add(message);
@@ -494,7 +560,7 @@ public class Server {
         }
     }
 
-    
+
     // Only supports AMF0 short strings (type 0x02, max 65535 bytes).
     // Strings longer than 65535 bytes are truncated to 65535 bytes.
     // Full support would need LONG_STRING (type 0x0C) with a 4-byte length prefix.
@@ -602,33 +668,55 @@ public class Server {
         switch (basicHeader.fmt) {
             case 0: // 11 bytes
                 message.timestamp = readIntFrom3Bytes(inputStream);
+                if (message.timestamp == 0xFFFFFF) {
+                    message.timestamp = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
+                }
                 message.length = readIntFrom3Bytes(inputStream);
                 message.typeId = inputStream.read();
                 message.streamId = ByteBuffer.wrap(inputStream.readNBytes(4)).order(ByteOrder.LITTLE_ENDIAN).getInt();
                 break;
             case 1: // 7 bytes
                 message.timestampDelta = readIntFrom3Bytes(inputStream);
+                if (message.timestampDelta == 0xFFFFFF) {
+                    message.timestampDelta = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
+                }
                 message.length = readIntFrom3Bytes(inputStream);
                 message.typeId = inputStream.read();
-                message.streamId = prevHeaders.get(basicHeader.csid).message.streamId;
+                RTMPHeader prev1 = prevHeaders.get(basicHeader.csid);
+                if (prev1 != null) {
+                    message.streamId = prev1.message.streamId;
+                    message.timestamp = prev1.message.timestamp + message.timestampDelta;
+                } else {
+                    System.out.println("WARN: fmt=1 for unknown csid=" + basicHeader.csid);
+                }
                 break;
             case 2: // 3 bytes
                 message.timestampDelta = readIntFrom3Bytes(inputStream);
-                message.length = prevHeaders.get(basicHeader.csid).message.length;
-                message.typeId = prevHeaders.get(basicHeader.csid).message.typeId;
-                message.streamId = prevHeaders.get(basicHeader.csid).message.streamId;
+                if (message.timestampDelta == 0xFFFFFF) {
+                    message.timestampDelta = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
+                }
+                RTMPHeader prev2 = prevHeaders.get(basicHeader.csid);
+                if (prev2 != null) {
+                    message.length = prev2.message.length;
+                    message.typeId = prev2.message.typeId;
+                    message.streamId = prev2.message.streamId;
+                    message.timestamp = prev2.message.timestamp + message.timestampDelta;
+                } else {
+                    System.out.println("WARN: fmt=2 for unknown csid=" + basicHeader.csid);
+                }
                 break;
             case 3: // 0 bytes
-                message.timestampDelta = prevHeaders.get(basicHeader.csid).message.timestampDelta;
-                message.timestamp = prevHeaders.get(basicHeader.csid).message.timestamp;
-                message.length = prevHeaders.get(basicHeader.csid).message.length;
-                message.typeId = prevHeaders.get(basicHeader.csid).message.typeId;
-                message.streamId = prevHeaders.get(basicHeader.csid).message.streamId;
+                RTMPHeader prev3 = prevHeaders.get(basicHeader.csid);
+                if (prev3 != null) {
+                    message.timestampDelta = prev3.message.timestampDelta;
+                    message.timestamp = prev3.message.timestamp;
+                    message.length = prev3.message.length;
+                    message.typeId = prev3.message.typeId;
+                    message.streamId = prev3.message.streamId;
+                } else {
+                    System.out.println("WARN: fmt=3 for unknown csid=" + basicHeader.csid);
+                }
                 break;
-        }
-
-        if (message.timestamp >= 255) {
-            rtmpHeader.extendedTimestamp = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
         }
 
         return rtmpHeader;
