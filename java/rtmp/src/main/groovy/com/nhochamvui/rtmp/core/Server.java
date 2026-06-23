@@ -35,8 +35,10 @@ import static com.nhochamvui.rtmp.core.functions.MediaHandler.writeFlvTag;
 
 
 @Singleton
-@Slf4j
 public class Server {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Server.class);
+    private static final org.slf4j.Logger ffmpegLog = org.slf4j.LoggerFactory.getLogger("ffmpeg");
 
     public static final int HANDSHAKE_LENGTH = 1536;
     public static final int VERSION_LENGTH = 1;
@@ -48,6 +50,9 @@ public class Server {
     private int inChunkSize = 128;
     private int outChunkSize = 128;
     private long connectionStartTime;
+    private String connectionId;
+    private String connectionIp;
+    private String streamKey;
     private int nextStreamId = 1;
 
     /**
@@ -65,11 +70,15 @@ public class Server {
             serverSocket.setReuseAddress(true);
             while (true) {
                 try {
-                    System.out.println("RTMP server is listening on port 1935...");
+                    log.info("RTMP server is listening on port 1935...");
                     try (Socket socket = serverSocket.accept()) {
                         socket.setTcpNoDelay(true);
                         socket.setSoTimeout(5000);
                         this.connectionStartTime = System.currentTimeMillis();
+                        this.connectionIp = socket.getInetAddress().getHostAddress();
+                        this.connectionId = connectionIp + "-" + connectionStartTime;
+                        log.info("[{}] RTMP connection accepted from {}", connectionId, connectionIp);
+
                         InputStream inputStream = socket.getInputStream();
                         OutputStream outputStream = socket.getOutputStream();
                         handleHandShake(inputStream, outputStream);
@@ -99,25 +108,31 @@ public class Server {
                                 process.waitFor(3, TimeUnit.SECONDS);
                             }
                             if (process.isAlive()) {
-                                System.out.println("FFmpeg still alive after cleanup, ignoring");
+                                log.info("[{}] FFmpeg still alive after cleanup, ignoring", connectionId);
                             } else {
-                                System.out.println("FFmpeg process finished with exit code: " + process.exitValue());
+                                log.info("[{}] FFmpeg process finished with exit code: {}", connectionId, process.exitValue());
                             }
                             process = null;
                             sentFlvHeader = false;
                         }
+
+                        long duration = System.currentTimeMillis() - connectionStartTime;
+                        log.info("[{}] RTMP connection closed | duration={}ms | IP={}", connectionId, duration, connectionIp);
                     }
                     catch (IOException e) {
                         throw new RuntimeException(e);
                     }
                 } catch (Exception ex) {
-                    System.out.println("Connection ended: " + ex.getMessage());
-                    ex.printStackTrace();
+                    log.error("[{}] Connection ended: {}", connectionId != null ? connectionId : "?", ex.getMessage(), ex);
                 }
             }
         } catch (IOException e) {
-            System.out.println("IOException: " + e.getMessage());
+            log.error("IOException: {}", e.getMessage(), e);
         }
+    }
+
+    public void setStreamKey(String key) {
+        this.streamKey = key != null && !key.isEmpty() ? key : System.getenv("RTMP_STREAM_KEY");
     }
 
     List<String> command = List.of("ffmpeg",
@@ -167,35 +182,31 @@ public class Server {
             currentMessageData.put(inputStream.readNBytes(maxLengthForCurrentChunkData));
             if (!currentMessageData.hasRemaining()) {
                 currentMessageData.flip();
-//                System.out.println(
-//                        "Finished chunk: " + header.basic.csid + ", message stream: " + header.message.streamId);
 
                 chunkPayload.remove(header.basic.csid);
                 List<Object> messages = new ArrayList<>();
                 switch (header.message.typeId) {
                     case 1:
                         this.inChunkSize = currentMessageData.getInt(0);
-                        System.out.println(
-                                "Process SetChunkSize message, new inChunkSize: " + this.inChunkSize);
+                        log.info("[{}] Process SetChunkSize message, new inChunkSize: {}", connectionId, this.inChunkSize);
                         break;
                     case 2:
-                        System.out.println("Process AbortMessage message");
+                        log.info("[{}] Process AbortMessage message", connectionId);
                         break;
                     case 3:
-                        System.out.println("Process Acknowledgement message");
+                        log.info("[{}] Process Acknowledgement message", connectionId);
                         break;
                     case 4:
-                        System.out.println("Process UserControl message");
+                        log.info("[{}] Process UserControl message", connectionId);
                         break;
                     case 5:
-                        System.out.println("Process Window Acknowledgement Size message");
+                        log.info("[{}] Process Window Acknowledgement Size message", connectionId);
                         break;
                     case 6:
-                        System.out.println("Process Set Peer Bandwidth message");
+                        log.info("[{}] Process Set Peer Bandwidth message", connectionId);
                         break;
                     case 8:
                     case 9:
-//                        System.out.println("Process typeId: " + header.message.typeId + " message");
                         byte[] payload = new byte[currentMessageData.remaining()];
                         currentMessageData.get(0, payload);
 
@@ -212,7 +223,7 @@ public class Server {
                                             new java.io.InputStreamReader(process.getInputStream()));
                                     String line;
                                     while ((line = reader.readLine()) != null) {
-                                        System.out.println("[ffmpeg] " + line);
+                                        ffmpegLog.info("[{}] {}", connectionId, line);
                                     }
                                 } catch (IOException ignored) { }
                             });
@@ -220,7 +231,7 @@ public class Server {
 
                         if (!process.isAlive()) {
                             String error = new String(process.getErrorStream().readAllBytes());
-                            System.out.println("FFmpeg exited: " + process.exitValue() + ", error: " + error);
+                            log.warn("[{}] FFmpeg exited: {}, error: {}", connectionId, process.exitValue(), error);
                             sentFlvHeader = false;
                             process = null;
                             break;
@@ -228,7 +239,7 @@ public class Server {
 
                         if (header.message.typeId == 9 && !sentFlvHeader) {
                             if (payload.length < 2 || (payload[1] & 0xFF) != 0) {
-                                System.out.println("Skip first video frame: not a sequence header");
+                                log.info("[{}] Skip first video frame: not a sequence header", connectionId);
                                 break;
                             }
                         }
@@ -241,20 +252,20 @@ public class Server {
                         writeFlvTag(process.getOutputStream(), (byte)header.message.typeId, header.message.timestamp, payload);
                         break;
                     case 15:
-                        System.out.println("Process AMF3 Command message");
+                        log.info("[{}] Process AMF3 Command message", connectionId);
                         break;
                     case 18:
-                        System.out.println("Process metadata message");
+                        log.info("[{}] Process metadata message", connectionId);
                         break;
                     case 20:
-                        System.out.println("Process AMF0 Command message");
+                        log.info("[{}] Process AMF0 Command message", connectionId);
                         while (currentMessageData.hasRemaining()) {
                             final Object message = decodeAMF0CommandMessage(currentMessageData);
                             messages.add(message);
                         }
-                        System.out.println("Finished decoding AMF0 command message: " + messages);
+                        log.info("[{}] Finished decoding AMF0 command message: {}", connectionId, messages);
                         String commandName = messages.isEmpty() ? "UNKNOWN" : messages.getFirst().toString();
-                        System.out.println(">>> Received command: " + commandName);
+                        log.info("[{}] >>> Received command: {}", connectionId, commandName);
                         handleCommandMessage(messages, header.message.streamId, inputStream, outputStream);
                         break;
                 }
@@ -267,22 +278,22 @@ public class Server {
             InputStream inputStream,
             OutputStream outputStream) throws IOException, StreamClose {
         if (messages.isEmpty()) {
-            System.out.println("Empty command message, exit.");
+            log.warn("[{}] Empty command message, exit.", connectionId);
             return;
         }
         String command = messages.getFirst().toString();
-        System.out.println(">>> Handling command: " + command + " on stream " + messageStreamId);
+        log.info("[{}] >>> Handling command: {} on stream {}", connectionId, command, messageStreamId);
         switch (command) {
             case "connect":
                 if (messages.get(2) instanceof Map<?, ?> map) {
                     String clientName = map.get("app").toString();
-                    System.out.println("Processing connect message for client: " + clientName);
+                    log.info("[{}] Processing connect message for client: {}", connectionId, clientName);
 
                     int encodeRequest = map.containsKey("objectEncoding")
                             ? Integer.parseInt(map.get("objectEncoding").toString())
                             : 0;
                     if (encodeRequest == 3) {
-                        System.out.println("WARNING: AMF3 is not supported, exit.");
+                        log.warn("[{}] WARNING: AMF3 is not supported, exit.", connectionId);
                         return;
                     }
 
@@ -303,17 +314,17 @@ public class Server {
                             new Tuple2<>("description", "Connection succeeded"),
                             new Tuple2<>("objectEncoding", 0)))));
                     final byte[] resultCommandMessage = encodeAMF0CommandMessage(responseBody, 0);
-                    System.out.println("before sending result: " + inputStream.available());
+                    log.info("[{}] before sending result: {} available", connectionId, inputStream.available());
                     outputStream.write(resultCommandMessage);
-                    System.out.println("Result message bytes: " + resultCommandMessage.length + " bytes");
+                    log.info("[{}] Result message bytes: {} bytes", connectionId, resultCommandMessage.length);
 
                     outputStream.flush();
                 }
-                System.out.println("Finished processing connect message");
+                log.info("[{}] Finished processing connect message", connectionId);
                 break;
 
             case "releaseStream":
-                System.out.println("Processing releaseStream...");
+                log.info("[{}] Processing releaseStream...", connectionId);
                 {
                     double txId = messages.size() > 1 && messages.get(1) instanceof Number
                             ? ((Number) messages.get(1)).doubleValue() : 0;
@@ -325,7 +336,7 @@ public class Server {
                 break;
 
             case "FCPublish":
-                System.out.println("Processing FCPublish...");
+                log.info("[{}] Processing FCPublish...", connectionId);
                 {
                     double txId = messages.size() > 1 && messages.get(1) instanceof Number
                             ? ((Number) messages.get(1)).doubleValue() : 0;
@@ -337,7 +348,7 @@ public class Server {
                 break;
 
             case "FCUnpublish":
-                System.out.println("Processing FCUnpublish...");
+                log.info("[{}] Processing FCUnpublish...", connectionId);
                 {
                     double txId = messages.size() > 1 && messages.get(1) instanceof Number
                             ? ((Number) messages.get(1)).doubleValue() : 0;
@@ -349,12 +360,12 @@ public class Server {
                 break;
 
             case "createStream":
-                System.out.println("Processing createStream...");
+                log.info("[{}] Processing createStream...", connectionId);
                 {
                     double txId = messages.size() > 1 && messages.get(1) instanceof Number
                             ? ((Number) messages.get(1)).doubleValue() : 0;
                     int newStreamId = nextStreamId++;
-                    System.out.println("Allocated stream ID: " + newStreamId);
+                    log.info("[{}] Allocated stream ID: {}", connectionId, newStreamId);
                     List<Object> response = Arrays.asList("_result", txId, null, (double) newStreamId);
                     byte[] data = encodeAMF0CommandMessage(response, 0);
                     outputStream.write(data);
@@ -363,13 +374,28 @@ public class Server {
                 break;
 
             case "publish":
-                System.out.println("Processing publish...");
+                log.info("[{}] Processing publish...", connectionId);
                 {
                     String streamName = messages.size() > 3 && messages.get(3) != null
                             ? messages.get(3).toString() : "stream";
                     String streamType = messages.size() > 4 && messages.get(4) != null
                             ? messages.get(4).toString() : "live";
-                    System.out.println("Stream: " + streamName + ", type: " + streamType);
+                    log.info("[{}] Stream: {}, type: {}", connectionId, streamName, streamType);
+
+                    String activeKey = streamKey != null && !streamKey.isEmpty()
+                            ? streamKey : System.getenv("RTMP_STREAM_KEY");
+                    if (activeKey != null && !activeKey.isEmpty() && !activeKey.equals(streamName)) {
+                        log.warn("[{}] Invalid stream key '{}', expected '{}'", connectionId, streamName, activeKey);
+                        Map<String, Object> errInfo = new LinkedHashMap<>();
+                        errInfo.put("level", "error");
+                        errInfo.put("code", "NetStream.Publish.BadName");
+                        errInfo.put("description", "Invalid stream key");
+                        List<Object> errResult = Arrays.asList("onStatus", (double) 0, null, errInfo);
+                        byte[] errData = encodeAMF0CommandMessage(errResult, messageStreamId);
+                        outputStream.write(errData);
+                        outputStream.flush();
+                        throw new StreamClose();
+                    }
 
                     Map<String, Object> info = new LinkedHashMap<>();
                     info.put("level", "status");
@@ -382,11 +408,11 @@ public class Server {
                 }
                 break;
             case "deleteStream":
-                System.out.println("Stop stream, clear session");
+                log.info("[{}] Stop stream, clear session", connectionId);
                 this.chunkPayload.clear();
                 throw new StreamClose();
             default:
-                System.out.println("Unknown command: " + command);
+                log.warn("[{}] Unknown command: {}", connectionId, command);
                 break;
         }
     }
@@ -432,8 +458,7 @@ public class Server {
         out.flush();
 
         buffer.release();
-        System.out.println("Sent Set Peer Bandwidth: " + bandwidth + ", type: " + limitType);
-        System.out.println("Set Peer Bandwidth bytes: " + data.length + " bytes");
+        log.info("[{}] Sent Set Peer Bandwidth: {}, type: {} ({} bytes)", connectionId, bandwidth, limitType, data.length);
     }
 
     private void sendWindowAckSize(OutputStream out, int windowSize) throws IOException {
@@ -458,8 +483,7 @@ public class Server {
         out.flush();
 
         buffer.release();
-        System.out.println("Sent Window Ack Size: " + windowSize);
-        System.out.println("Window Ack bytes: " + data.length + " bytes");
+        log.info("[{}] Sent Window Ack Size: {} ({} bytes)", connectionId, windowSize, data.length);
     }
 
     private void sendSetChunkSize(OutputStream outputStream, int chunkSize) throws IOException {
@@ -484,8 +508,7 @@ public class Server {
         outputStream.flush();
 
         buffer.release();
-        System.out.println("Sent set chunk size message: " + chunkSize);
-        System.out.println("set chunk size message bytes: " + data.length + " bytes");
+        log.info("[{}] Sent set chunk size message: {} ({} bytes)", connectionId, chunkSize, data.length);
     }
 
     private static void writeMasterPlaylist() throws IOException {
@@ -497,13 +520,13 @@ public class Server {
                 ld/output.m3u8
                 """;
         Files.writeString(java.nio.file.Path.of("hls/master.m3u8"), playlist);
-        System.out.println("Written master playlist");
+        log.info("Written master playlist");
     }
 
     byte[] encodeAMF0CommandMessage(final List<Object> messages, int streamId) throws IOException {
         ByteBuf buffer = Unpooled.buffer();
         if (messages.isEmpty()) {
-            System.out.println("Empty command message, exit.");
+            log.warn("Empty command message, exit.");
             return new byte[0];
         }
 
@@ -567,7 +590,7 @@ public class Server {
     }
 
     private static ByteBuf encodeMessage(final Object message) {
-        System.out.println("Encoding: " + message + " type: " + (message != null ? message.getClass() : "null"));
+        log.info("Encoding: {} type: {}", message, message != null ? message.getClass() : "null");
         ByteBuf byteBuffer = Unpooled.buffer();
         if (message == null) {
             byteBuffer.writeByte((byte) 0x05);
@@ -591,7 +614,7 @@ public class Server {
                 byteBuffer.writeBytes(AMF0Message.OBJECT_END_MARKER);
                 break;
             default:
-                System.out.println("Not supported value type: " + message.getClass());
+                log.warn("Not supported value type: {}", message.getClass());
                 break;
         }
         return byteBuffer;
@@ -641,18 +664,18 @@ public class Server {
                 if (encodedType == 0x08) {
                     count = currentMessageData.getInt();
                 }
-                System.out.println("Process AMF3 Command message, count: " + count);
+                log.info("[{}] Process AMF0 MAP/OBJECT message, count: {}", connectionId, count);
                 int i = 0;
                 final byte[] endMarker = new byte[3];
                 while (currentMessageData.hasRemaining()) {
                     currentMessageData.get(currentMessageData.position(), endMarker);
                     if (Arrays.equals(endMarker, AMF0Message.OBJECT_END_MARKER)) {
                         currentMessageData.get(new byte[3]); // skip 3 bytes
-                        System.out.println("Finished reading for MAP/OBJECT data when reaching end marker");
+                        log.info("[{}] Finished reading MAP/OBJECT data when reaching end marker", connectionId);
                         break;
                     }
                     if (count > 0 && i == count) {
-                        System.out.println("Finished reading for MAP/OBJECT data");
+                        log.info("[{}] Finished reading MAP/OBJECT data", connectionId);
                         break;
                     }
                     short propertySize = currentMessageData.getShort();
@@ -710,7 +733,6 @@ public class Server {
             csid = ((bytes[0] & MASK_OF_8_BITS) + 64) + ((bytes[1] & MASK_OF_8_BITS) << 8);
         }
         basicHeader.csid = csid;
-//        System.out.println("Reading chunk " + basicHeader.csid);
 
         final Message message = rtmpHeader.message;
         switch (basicHeader.fmt) {
@@ -735,7 +757,7 @@ public class Server {
                     message.streamId = prev1.message.streamId;
                     message.timestamp = prev1.message.timestamp + message.timestampDelta;
                 } else {
-                    System.out.println("WARN: fmt=1 for unknown csid=" + basicHeader.csid);
+                    log.warn("[{}] WARN: fmt=1 for unknown csid={}", connectionId, basicHeader.csid);
                 }
                 break;
             case 2: // 3 bytes
@@ -750,7 +772,7 @@ public class Server {
                     message.streamId = prev2.message.streamId;
                     message.timestamp = prev2.message.timestamp + message.timestampDelta;
                 } else {
-                    System.out.println("WARN: fmt=2 for unknown csid=" + basicHeader.csid);
+                    log.warn("[{}] WARN: fmt=2 for unknown csid={}", connectionId, basicHeader.csid);
                 }
                 break;
             case 3: // 0 bytes
@@ -762,7 +784,7 @@ public class Server {
                     message.typeId = prev3.message.typeId;
                     message.streamId = prev3.message.streamId;
                 } else {
-                    System.out.println("WARN: fmt=3 for unknown csid=" + basicHeader.csid);
+                    log.warn("[{}] WARN: fmt=3 for unknown csid={}", connectionId, basicHeader.csid);
                 }
                 break;
         }
@@ -771,7 +793,7 @@ public class Server {
     }
 
     public static void handleHandShake(InputStream reader, OutputStream out) throws IOException {
-        System.out.println("Handshake started.");
+        log.info("Handshake started.");
 
         // C0 is a byte indicates the requested version from RTMP client
         int c0 = reader.read();
@@ -780,7 +802,7 @@ public class Server {
         sendS2(out, c1);
         byte[] c2 = readToBuffer(reader, HANDSHAKE_LENGTH);
 
-        System.out.println("Handshake finished.");
+        log.info("Handshake finished.");
     }
 
     private static void sendS2(OutputStream out, byte[] c1) throws IOException {
@@ -796,9 +818,9 @@ public class Server {
     public static int determineVersion(int requestedVersion) {
         switch (requestedVersion) {
             case 0, 2:
-                System.out.println("Reject deprecated version.");
+                log.warn("Reject deprecated version.");
             default:
-                System.out.println("Selected version: " + DEFAULT_VERSION);
+                log.info("Selected version: {}", DEFAULT_VERSION);
                 return DEFAULT_VERSION;
         }
     }
@@ -850,7 +872,7 @@ public class Server {
             i++;
         }
         final long now = System.currentTimeMillis();
-        System.out.println("Finish in " + ((now - then) / 1000));
+        log.info("Finish in {} seconds", (now - then) / 1000);
         return buffer;
     }
 
