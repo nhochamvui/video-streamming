@@ -145,8 +145,7 @@ public class Server {
             "-hls_time", "1",
             "-hls_segment_type", "fmp4",
             "-hls_list_size", "10",
-            "-hls_flags", "split_by_time",
-            "-hls_wrap", "12",
+            "-hls_flags", "split_by_time+delete_segments",
             "-hls_segment_filename", "hls/hd/output_%d.m4s",
             "hls/hd/output.m3u8",
             "-map", "0:v", "-map", "0:a",
@@ -157,8 +156,7 @@ public class Server {
             "-hls_time", "1",
             "-hls_segment_type", "fmp4",
             "-hls_list_size", "10",
-            "-hls_flags", "split_by_time",
-            "-hls_wrap", "12",
+            "-hls_flags", "split_by_time+delete_segments",
             "-hls_segment_filename", "hls/ld/output_%d.m4s",
             "hls/ld/output.m3u8");
     ProcessBuilder processBuilder = new ProcessBuilder(command);
