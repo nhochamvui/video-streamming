@@ -139,27 +139,24 @@ public class Server {
             "-fflags", "+genpts",
             "-f", "flv", "-i", "pipe:0",
             "-map", "0:v", "-map", "0:a", "-c", "copy",
-            "-f", "segment", "-segment_time", "1",
-            "-segment_format", "mpegts",
-            "-segment_list_type", "m3u8",
-            "-segment_list", "hls/hd/output.m3u8",
-            "-segment_list_size", "10",
-            "-segment_wrap", "12",
-            "-segment_list_flags", "live",
-            "hls/hd/output_%d.ts",
+            "-f", "hls",
+            "-hls_time", "1",
+            "-hls_segment_type", "fmp4",
+            "-hls_list_size", "10",
+            "-hls_flags", "delete_segments+split_by_time",
+            "-hls_segment_filename", "hls/hd/output_%d.m4s",
+            "hls/hd/output.m3u8",
             "-map", "0:v", "-map", "0:a",
             "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "800k",
             "-s", "854x480", "-g", "30",
             "-c:a", "aac", "-b:a", "64k",
-            "-f", "segment", "-segment_time", "1",
-            "-segment_format", "mpegts",
-            "-segment_list_type", "m3u8",
-            "-segment_list", "hls/ld/output.m3u8",
-            "-segment_list_size", "10",
-            "-segment_wrap", "12",
-            "-segment_list_flags", "live",
-            "-break_non_keyframes", "1",
-            "hls/ld/output_%d.ts");
+            "-f", "hls",
+            "-hls_time", "1",
+            "-hls_segment_type", "fmp4",
+            "-hls_list_size", "10",
+            "-hls_flags", "delete_segments+split_by_time",
+            "-hls_segment_filename", "hls/ld/output_%d.m4s",
+            "hls/ld/output.m3u8");
     ProcessBuilder processBuilder = new ProcessBuilder(command);
     Process process = null;
     boolean sentFlvHeader = false;
@@ -514,7 +511,7 @@ public class Server {
     private static void writeMasterPlaylist() throws IOException {
         String playlist = """
                 #EXTM3U
-                #EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080,NAME="HD"
+                #EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,NAME="HD"
                 hd/output.m3u8
                 #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=854x480,NAME="SD"
                 ld/output.m3u8
