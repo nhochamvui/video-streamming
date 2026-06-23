@@ -2,6 +2,7 @@ package com.nhochamvui.rtmp.core;
 
 import com.nhochamvui.rtmp.core.enums.AMF0Type;
 import com.nhochamvui.rtmp.core.enums.ReadState;
+import com.nhochamvui.rtmp.core.exceptions.StreamClose;
 import com.nhochamvui.rtmp.core.models.AMF0Message;
 import com.nhochamvui.rtmp.core.models.Basic;
 import com.nhochamvui.rtmp.core.models.Message;
@@ -25,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 
 import static com.nhochamvui.rtmp.core.constants.Constant.*;
 import static com.nhochamvui.rtmp.core.functions.MediaHandler.createFlvHeader;
@@ -65,14 +67,21 @@ public class Server {
                     System.out.println("RTMP server is listening on port 1935...");
                     try (Socket socket = serverSocket.accept()) {
                         socket.setTcpNoDelay(true);
+                        socket.setSoTimeout(5000);
                         this.connectionStartTime = System.currentTimeMillis();
                         InputStream inputStream = socket.getInputStream();
                         OutputStream outputStream = socket.getOutputStream();
                         handleHandShake(inputStream, outputStream);
 
-                        while (!socket.isClosed()) {
+                        while (!socket.isClosed() && !socket.isInputShutdown()) {
                             if (inputStream.available() > 0) {
                                 handleChunkMessage(inputStream, outputStream);
+                                try {
+                                    handleChunkMessage(inputStream, outputStream);
+                                }
+                                catch (StreamClose e) {
+                                    socket.close();
+                                }
                             } else {
                                 try {
                                     Thread.sleep(10);
@@ -85,18 +94,25 @@ public class Server {
 
                         if (process != null) {
                             process.getOutputStream().close();
-                            process.waitFor();
-                            System.out.println("FFmpeg process finished with exit code: " + process.exitValue());
+                            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                                process.destroyForcibly();
+                                process.waitFor(3, TimeUnit.SECONDS);
+                            }
+                            if (process.isAlive()) {
+                                System.out.println("FFmpeg still alive after cleanup, ignoring");
+                            } else {
+                                System.out.println("FFmpeg process finished with exit code: " + process.exitValue());
+                            }
                             process = null;
                             sentFlvHeader = false;
                         }
-                    } catch (IOException e) {
+                    }
+                    catch (IOException e) {
                         throw new RuntimeException(e);
                     }
                 } catch (Exception ex) {
-                    System.out.println("Exception while handle chunk message: " + ex);
+                    System.out.println("Connection ended: " + ex.getMessage());
                     ex.printStackTrace();
-                    break;
                 }
             }
         } catch (IOException e) {
@@ -127,7 +143,7 @@ public class Server {
      * @param outputStream
      * @throws IOException
      */
-    private void handleChunkMessage(InputStream inputStream, OutputStream outputStream) throws IOException {
+    private void handleChunkMessage(InputStream inputStream, OutputStream outputStream) throws IOException, StreamClose {
         final RTMPHeader header = readRTMPHeader(inputStream);
         prevHeaders.put(header.basic.csid, header);
         chunkPayload.putIfAbsent(header.basic.csid, ByteBuffer.allocateDirect(header.message.length));
@@ -234,7 +250,7 @@ public class Server {
     private void handleCommandMessage(List<Object> messages,
             int messageStreamId,
             InputStream inputStream,
-            OutputStream outputStream) throws IOException {
+            OutputStream outputStream) throws IOException, StreamClose {
         if (messages.isEmpty()) {
             System.out.println("Empty command message, exit.");
             return;
@@ -350,6 +366,10 @@ public class Server {
                     outputStream.flush();
                 }
                 break;
+            case "deleteStream":
+                System.out.println("Stop stream, clear session");
+                this.chunkPayload.clear();
+                throw new StreamClose();
             default:
                 System.out.println("Unknown command: " + command);
                 break;
