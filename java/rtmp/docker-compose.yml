@@ -1,0 +1,12 @@
+version: "3.8"
+
+services:
+  rtmp-server:
+    build: .
+    container_name: rtmp-server
+    ports:
+      - "8888:8888"
+      - "1935:1935"
+    volumes:
+      - ./hls:/app/hls
+    restart: unless-stopped

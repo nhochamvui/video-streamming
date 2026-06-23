@@ -13,6 +13,7 @@ class StreamController {
 <html>
 <head>
     <title>Live Stream</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
     <style>
         body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
