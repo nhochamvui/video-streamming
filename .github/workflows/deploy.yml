@@ -17,23 +17,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: 21
-          distribution: temurin
-
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.gradle/caches
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle.properties') }}
-          restore-keys: ${{ runner.os }}-gradle-
-
-      - name: Build shadow JAR
-        run: ./gradlew build
-        working-directory: java/rtmp
-
       - name: Extract version
         run: echo "VERSION=$(grep '^version' build.gradle | sed 's/.*= *\"\(.*\)\"/\1/')" >> $GITHUB_ENV
         working-directory: java/rtmp
