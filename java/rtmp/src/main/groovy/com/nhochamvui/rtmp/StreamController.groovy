@@ -3,6 +3,7 @@ package com.nhochamvui.rtmp
 import io.micronaut.http.MediaType
 import io.micronaut.http.annotation.Controller
 import io.micronaut.http.annotation.Get
+import io.micronaut.http.annotation.Produces
 
 @Controller("/")
 class StreamController {
@@ -51,5 +52,12 @@ class StreamController {
     </script>
 </body>
 </html>"""
+    }
+
+    @Get("/version")
+    @Produces(MediaType.TEXT_PLAIN)
+    String version() {
+        String v = getClass().getPackage().getImplementationVersion()
+        return v != null ? v : "unknown"
     }
 }

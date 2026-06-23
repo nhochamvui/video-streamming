@@ -5,7 +5,7 @@ plugins {
     id("io.micronaut.aot") version "4.5.3"
 }
 
-version = "0.1"
+version = "1.0-beta"
 group = "com.nhochamvui.rtmp"
 
 repositories {
@@ -33,6 +33,12 @@ java {
     targetCompatibility = JavaVersion.toVersion("21")
 }
 
+
+shadowJar {
+    manifest {
+        attributes('Implementation-Version': version)
+    }
+}
 
 graalvmNative.toolchainDetection = false
 
