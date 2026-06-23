@@ -54,8 +54,8 @@ jobs:
           context: java/rtmp
           push: true
           tags: |
-            ghcr.io/ngohoangtho/rtmp-server:latest
-            ghcr.io/ngohoangtho/rtmp-server:${{ env.VERSION }}
-            ghcr.io/ngohoangtho/rtmp-server:${{ github.sha }}
+            ghcr.io/nhochamvui/video-streamming:latest
+            ghcr.io/nhochamvui/video-streamming:${{ env.VERSION }}
+            ghcr.io/nhochamvui/video-streamming:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
