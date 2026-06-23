@@ -82,6 +82,8 @@ public class Server {
                         InputStream inputStream = socket.getInputStream();
                         OutputStream outputStream = socket.getOutputStream();
                         handleHandShake(inputStream, outputStream);
+                        prevHeaders.clear();
+                        chunkPayload.clear();
 
                         while (!socket.isClosed() && !socket.isInputShutdown()) {
                             if (inputStream.available() > 0) {
@@ -756,7 +758,7 @@ public class Server {
                     message.streamId = prev1.message.streamId;
                     message.timestamp = prev1.message.timestamp + message.timestampDelta;
                 } else {
-                    log.warn("[{}] WARN: fmt=1 for unknown csid={}", connectionId, basicHeader.csid);
+                    throw new IOException(String.format("[%s] fmt=1 chunk for unknown csid=%d", connectionId, basicHeader.csid));
                 }
                 break;
             case 2: // 3 bytes
@@ -771,7 +773,7 @@ public class Server {
                     message.streamId = prev2.message.streamId;
                     message.timestamp = prev2.message.timestamp + message.timestampDelta;
                 } else {
-                    log.warn("[{}] WARN: fmt=2 for unknown csid={}", connectionId, basicHeader.csid);
+                    throw new IOException(String.format("[%s] fmt=2 chunk for unknown csid=%d", connectionId, basicHeader.csid));
                 }
                 break;
             case 3: // 0 bytes
@@ -783,7 +785,7 @@ public class Server {
                     message.typeId = prev3.message.typeId;
                     message.streamId = prev3.message.streamId;
                 } else {
-                    log.warn("[{}] WARN: fmt=3 for unknown csid={}", connectionId, basicHeader.csid);
+                    throw new IOException(String.format("[%s] fmt=3 chunk for unknown csid=%d", connectionId, basicHeader.csid));
                 }
                 break;
         }
@@ -842,8 +844,13 @@ public class Server {
 
     public static byte[] readToBuffer(InputStream in, int length) throws IOException {
         byte[] buffer = new byte[length];
-        if (in.read(buffer) == -1) {
-            throw new IOException("End of stream");
+        int offset = 0;
+        while (offset < length) {
+            int bytesRead = in.read(buffer, offset, length - offset);
+            if (bytesRead == -1) {
+                throw new IOException("End of stream");
+            }
+            offset += bytesRead;
         }
         return buffer;
     }
