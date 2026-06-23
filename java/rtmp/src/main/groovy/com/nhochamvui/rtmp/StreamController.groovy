@@ -13,27 +13,40 @@ class StreamController {
 <html>
 <head>
     <title>Live Stream</title>
+    <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
     <style>
-        body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #111; }
-        video { width: 100%; max-width: 960px; }
+        body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .video-js { width: 100%; max-width: 960px; }
     </style>
 </head>
 <body>
-    <video id="v" controls autoplay muted crossOrigin="anonymous"></video>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <video id="player" class="video-js vjs-default-skin" controls preload="auto" autoplay muted></video>
+    <script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/videojs-hls-quality-selector@2.0.0/dist/videojs-hls-quality-selector.min.js"></script>
     <script>
-        var video = document.getElementById('v');
-        if (Hls.isSupported()) {
-            var hls = new Hls({
-                liveSyncDurationCount: 3,
-                maxBufferLength: 10,
-                maxMaxBufferLength: 15
-            });
-            hls.loadSource('/hls/output.m3u8');
-            hls.attachMedia(video);
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = '/hls/output.m3u8';
-        }
+        var player = videojs('player', {
+            liveui: true,
+            liveTracker: {
+                trackingThreshold: 0,
+                liveTolerance: 5
+            },
+            html5: {
+                vhs: {
+                    overrideNative: true,
+                    enableLowInitialPlaylist: true,
+                    goalBufferLength: 10,
+                    maxBufferLength: 15,
+                    liveSyncDuration: 3
+                },
+                nativeAudioTracks: false,
+                nativeVideoTracks: false
+            },
+            sources: [{
+                src: '/hls/master.m3u8',
+                type: 'application/x-mpegURL'
+            }]
+        });
+        player.hlsQualitySelector();
     </script>
 </body>
 </html>"""

@@ -19,6 +19,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -75,7 +76,6 @@ public class Server {
 
                         while (!socket.isClosed() && !socket.isInputShutdown()) {
                             if (inputStream.available() > 0) {
-                                handleChunkMessage(inputStream, outputStream);
                                 try {
                                     handleChunkMessage(inputStream, outputStream);
                                 }
@@ -121,17 +121,30 @@ public class Server {
     }
 
     List<String> command = List.of("ffmpeg",
+            "-fflags", "+genpts",
             "-f", "flv", "-i", "pipe:0",
-            "-c", "copy",
+            "-map", "0:v", "-map", "0:a", "-c", "copy",
             "-f", "segment", "-segment_time", "1",
             "-segment_format", "mpegts",
             "-segment_list_type", "m3u8",
-            "-segment_list", "hls/output.m3u8",
+            "-segment_list", "hls/hd/output.m3u8",
+            "-segment_list_size", "10",
+            "-segment_wrap", "12",
+            "-segment_list_flags", "live",
+            "hls/hd/output_%d.ts",
+            "-map", "0:v", "-map", "0:a",
+            "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "800k",
+            "-s", "854x480", "-g", "30",
+            "-c:a", "aac", "-b:a", "64k",
+            "-f", "segment", "-segment_time", "1",
+            "-segment_format", "mpegts",
+            "-segment_list_type", "m3u8",
+            "-segment_list", "hls/ld/output.m3u8",
             "-segment_list_size", "10",
             "-segment_wrap", "12",
             "-segment_list_flags", "live",
             "-break_non_keyframes", "1",
-            "hls/output_%d.ts");
+            "hls/ld/output_%d.ts");
     ProcessBuilder processBuilder = new ProcessBuilder(command);
     Process process = null;
     boolean sentFlvHeader = false;
@@ -154,8 +167,8 @@ public class Server {
             currentMessageData.put(inputStream.readNBytes(maxLengthForCurrentChunkData));
             if (!currentMessageData.hasRemaining()) {
                 currentMessageData.flip();
-                System.out.println(
-                        "Finished chunk: " + header.basic.csid + ", message stream: " + header.message.streamId);
+//                System.out.println(
+//                        "Finished chunk: " + header.basic.csid + ", message stream: " + header.message.streamId);
 
                 chunkPayload.remove(header.basic.csid);
                 List<Object> messages = new ArrayList<>();
@@ -182,12 +195,14 @@ public class Server {
                         break;
                     case 8:
                     case 9:
-                        System.out.println("Process typeId: " + header.message.typeId + " message");
+//                        System.out.println("Process typeId: " + header.message.typeId + " message");
                         byte[] payload = new byte[currentMessageData.remaining()];
                         currentMessageData.get(0, payload);
 
                         if (process == null){
-                            new File("hls").mkdirs();
+                            new File("hls/hd").mkdirs();
+                            new File("hls/ld").mkdirs();
+                            writeMasterPlaylist();
                             processBuilder.redirectErrorStream(true);
                             process = processBuilder.start();
 
@@ -473,6 +488,18 @@ public class Server {
         System.out.println("set chunk size message bytes: " + data.length + " bytes");
     }
 
+    private static void writeMasterPlaylist() throws IOException {
+        String playlist = """
+                #EXTM3U
+                #EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080,NAME="HD"
+                hd/output.m3u8
+                #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=854x480,NAME="SD"
+                ld/output.m3u8
+                """;
+        Files.writeString(java.nio.file.Path.of("hls/master.m3u8"), playlist);
+        System.out.println("Written master playlist");
+    }
+
     byte[] encodeAMF0CommandMessage(final List<Object> messages, int streamId) throws IOException {
         ByteBuf buffer = Unpooled.buffer();
         if (messages.isEmpty()) {
@@ -683,7 +710,7 @@ public class Server {
             csid = ((bytes[0] & MASK_OF_8_BITS) + 64) + ((bytes[1] & MASK_OF_8_BITS) << 8);
         }
         basicHeader.csid = csid;
-        System.out.println("Reading chunk " + basicHeader.csid);
+//        System.out.println("Reading chunk " + basicHeader.csid);
 
         final Message message = rtmpHeader.message;
         switch (basicHeader.fmt) {
