@@ -29,29 +29,47 @@ on:
         description: "Video bitrate (e.g. 2500k)"
         required: false
         type: string
-        default: "5000k"
+        default: "2500k"
       burst_mode:
         description: "Enable 20-bot high-concurrency burst"
         required: false
         type: boolean
         default: false
   schedule:
-    - cron: "*/30 * * * *" # every 6 hours — adjust as needed
+    - cron: "*/30 * * * *"
 
 env:
   RTMP_HOST: ${{ secrets.RTMP_HOST }}
   RTMP_PORT: ${{ secrets.RTMP_PORT || '1935' }}
 
 jobs:
+  # ─── Dynamically generate bot ID array (needed for matrix) ──────────────────
+  matrix-generator:
+    runs-on: ubuntu-latest
+    outputs:
+      bot_ids: ${{ steps.gen.outputs.bot_ids }}
+    steps:
+      - id: gen
+        run: |
+          COUNT=${{ inputs.bot_count || 10 }}
+          IDS="["
+          for i in $(seq 0 $((COUNT - 1))); do
+            [ "$i" -gt 0 ] && IDS="${IDS},"
+            IDS="${IDS}${i}"
+          done
+          IDS="${IDS}]"
+          echo "bot_ids=${IDS}" >> "$GITHUB_OUTPUT"
+
   # ─── Normal stress test (matrix of N bots) ──────────────────────────────────
   rtmp-bot:
+    needs: matrix-generator
     if: ${{ !inputs.burst_mode && vars.SKIP_SCHEDULED != 'true' }}
     strategy:
-      fail-fast: false # one bot dying shouldn't kill others
+      fail-fast: false
       matrix:
-        bot_id: ${{ fromJSON(format('[{0}]', inputs.bot_count && join(range(0, inputs.bot_count), ',') || join(range(0, 10), ','))) }}
+        bot_id: ${{ fromJSON(needs.matrix-generator.outputs.bot_ids) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 6 hours max per GitHub Actions policy
+    timeout-minutes: 360
     steps:
       - name: Install FFmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
@@ -74,7 +92,7 @@ jobs:
             -c:a aac -b:a 64k \
             -f flv \
             "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
-          | tee ffmpeg-bot-${{ matrix.bot_id }}.log
+          | tee "ffmpeg-bot-${{ matrix.bot_id }}.log"
 
       - name: Upload FFmpeg logs
         if: always()
@@ -110,7 +128,7 @@ jobs:
             -c:a aac -b:a 48k \
             -f flv \
             "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
-          | tee ffmpeg-burst-${{ matrix.bot_id }}.log
+          | tee "ffmpeg-burst-${{ matrix.bot_id }}.log"
 
       - name: Upload burst logs
         if: always()
