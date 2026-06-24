@@ -1,5 +1,6 @@
 package com.nhochamvui.rtmp
 
+import com.nhochamvui.rtmp.core.Server
 import io.micronaut.http.MediaType
 import io.micronaut.http.annotation.Controller
 import io.micronaut.http.annotation.Get
@@ -8,12 +9,57 @@ import io.micronaut.http.annotation.Produces
 @Controller("/")
 class StreamController {
 
+    private final Server server
+
+    StreamController(Server server) {
+        this.server = server
+    }
+
     @Get(produces = MediaType.TEXT_HTML)
     String index() {
+        def streamNames = server.activeStreamNames
+        if (streamNames.isEmpty()) {
+            return """<!DOCTYPE html>
+<html>
+<head><title>RTMP Server</title></head>
+<body style="font-family: monospace; padding: 2em;">
+    <h1>RTMP Server</h1>
+    <p>No active streams.</p>
+    <p>Connect an RTMP publisher (OBS, ffmpeg) to start streaming.</p>
+    <p>Stream URL: <code>rtmp://host:1935/live/{stream-key}</code></p>
+</body>
+</html>"""
+        }
+        def links = streamNames.collect { name ->
+            """<li><a href="/${name}">${name}</a></li>"""
+        }.join("\n")
+        return """<!DOCTYPE html>
+<html>
+<head><title>RTMP Streams</title></head>
+<body style="font-family: monospace; padding: 2em;">
+    <h1>Active Streams</h1>
+    <ul>${links}</ul>
+</body>
+</html>"""
+    }
+
+    @Get("/{streamKey}")
+    @Produces(MediaType.TEXT_HTML)
+    String streamPlayer(String streamKey) {
+        if (!server.hasStream(streamKey)) {
+            return """<!DOCTYPE html>
+<html>
+<head><title>Stream Not Found</title></head>
+<body style="font-family: monospace; padding: 2em;">
+    <h1>Stream not found: ${streamKey}</h1>
+    <p><a href="/">Back to stream list</a></p>
+</body>
+</html>"""
+        }
         return """<!DOCTYPE html>
 <html>
 <head>
-    <title>Live Stream</title>
+    <title>Live Stream - ${streamKey}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
     <style>
@@ -24,7 +70,6 @@ class StreamController {
 <body>
     <video id="player" class="video-js vjs-default-skin" controls preload="auto" autoplay muted></video>
     <script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/videojs-hls-quality-selector@2.0.0/dist/videojs-hls-quality-selector.min.js"></script>
     <script>
         var player = videojs('player', {
             liveui: true,
@@ -44,11 +89,10 @@ class StreamController {
                 nativeVideoTracks: false
             },
             sources: [{
-                src: '/hls/master.m3u8',
+                src: '/hls/${streamKey}/master.m3u8',
                 type: 'application/x-mpegURL'
             }]
         });
-        player.hlsQualitySelector();
     </script>
 </body>
 </html>"""
