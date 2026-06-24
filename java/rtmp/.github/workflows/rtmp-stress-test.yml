@@ -1,0 +1,121 @@
+# ─── RTMP Stress Test — GitHub Actions ────────────────────────────────────────
+# Set these secrets in repo: Settings > Secrets and variables > Actions
+#   RTMP_HOST    = your-server-ip-or-domain (REQUIRED)
+#   RTMP_PORT    = 1935 (optional)
+#
+# Triggers: manual (workflow_dispatch) + cron (schedule)
+
+name: RTMP Stress Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      bot_count:
+        description: "Number of concurrent bots"
+        required: true
+        type: number
+        default: 10
+      bot_duration:
+        description: "Stream duration per bot (seconds)"
+        required: true
+        type: number
+        default: 300
+      resolution:
+        description: "Video resolution (WxH)"
+        required: false
+        type: string
+        default: "1280x720"
+      bitrate:
+        description: "Video bitrate (e.g. 2500k)"
+        required: false
+        type: string
+        default: "5000k"
+      burst_mode:
+        description: "Enable 20-bot high-concurrency burst"
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "*/30 * * * *" # every 6 hours — adjust as needed
+
+env:
+  RTMP_HOST: ${{ secrets.RTMP_HOST }}
+  RTMP_PORT: ${{ secrets.RTMP_PORT || '1935' }}
+
+jobs:
+  # ─── Normal stress test (matrix of N bots) ──────────────────────────────────
+  rtmp-bot:
+    if: ${{ !inputs.burst_mode && vars.SKIP_SCHEDULED != 'true' }}
+    strategy:
+      fail-fast: false # one bot dying shouldn't kill others
+      matrix:
+        bot_id: ${{ fromJSON(format('[{0}]', inputs.bot_count && join(range(0, inputs.bot_count), ',') || join(range(0, 10), ','))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 hours max per GitHub Actions policy
+    steps:
+      - name: Install FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Run RTMP bot
+        run: |
+          STREAM_KEY="bot-${GITHUB_RUN_ID}-${{ matrix.bot_id }}-$(openssl rand -hex 4)"
+          DURATION=${{ inputs.bot_duration || 300 }}
+          RES=${{ inputs.resolution || '1280x720' }}
+          BR=${{ inputs.bitrate || '2500k' }}
+
+          echo "Bot ${{ matrix.bot_id }} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
+          echo "Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
+
+          ffmpeg \
+            -re \
+            -f lavfi -i "testsrc=duration=${DURATION}:size=${RES}:rate=30" \
+            -f lavfi -i "sine=frequency=440:duration=${DURATION}" \
+            -c:v libx264 -preset ultrafast -tune zerolatency -b:v "${BR}" \
+            -c:a aac -b:a 64k \
+            -f flv \
+            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
+          | tee ffmpeg-bot-${{ matrix.bot_id }}.log
+
+      - name: Upload FFmpeg logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-logs-bot-${{ matrix.bot_id }}
+          path: ffmpeg-bot-*.log
+          retention-days: 1
+
+  # ─── Burst mode: 20 low-res bots × 2 minutes — max concurrency ──────────────
+  burst:
+    if: ${{ inputs.burst_mode == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        bot_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Run burst bot
+        run: |
+          STREAM_KEY="burst-${GITHUB_RUN_ID}-${{ matrix.bot_id }}-$(openssl rand -hex 4)"
+          echo "Burst bot ${{ matrix.bot_id }}/20 → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
+
+          ffmpeg \
+            -re \
+            -f lavfi -i "testsrc=duration=120:size=640x360:rate=30" \
+            -f lavfi -i "sine=frequency=440:duration=120" \
+            -c:v libx264 -preset ultrafast -tune zerolatency -b:v 800k \
+            -c:a aac -b:a 48k \
+            -f flv \
+            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
+          | tee ffmpeg-burst-${{ matrix.bot_id }}.log
+
+      - name: Upload burst logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-logs-burst-${{ matrix.bot_id }}
+          path: ffmpeg-burst-*.log
+          retention-days: 1
