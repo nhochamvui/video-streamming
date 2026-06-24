@@ -127,7 +127,7 @@ jobs:
             -c:v libx264 -preset ultrafast -tune zerolatency -b:v 800k \
             -c:a aac -b:a 48k \
             -f flv \
-            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
+            "rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}" 2>&1 \
           | tee "ffmpeg-burst-${{ matrix.bot_id }}.log"
 
       - name: Upload burst logs
