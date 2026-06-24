@@ -81,7 +81,7 @@ jobs:
           RES=${{ inputs.resolution || '1280x720' }}
           BR=${{ inputs.bitrate || '2500k' }}
 
-          echo "Bot ${{ matrix.bot_id }} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
+          echo "Bot ${{ matrix.bot_id }} → rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}"
           echo "Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
 
           ffmpeg \
