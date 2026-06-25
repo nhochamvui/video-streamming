@@ -55,6 +55,24 @@ public class ClientSession {
     private Process ffmpegProcess;
     private boolean sentFlvHeader = false;
 
+    private long audioPackets;
+    private long videoPackets;
+    private long audioBytes;
+    private long videoBytes;
+    private long bytesToFfmpeg;
+    private long keyframeCount;
+    private long lastKeyframeTimestamp = -1;
+    private long maxKeyframeInterval;
+    private long firstMediaTimestamp = -1;
+    private long lastMediaTimestamp;
+    private long maxSeenTimestamp;
+    private long droppedPackets;
+    private long streamStartWallTime;
+    private volatile String ffmpegFps;
+    private volatile String ffmpegBitrate;
+    private volatile String ffmpegSpeed;
+    private volatile boolean streaming;
+
     public ClientSession(Socket socket, Server server) throws IOException {
         this.socket = socket;
         this.server = server;
@@ -191,6 +209,32 @@ public class ClientSession {
                         byte[] payload = new byte[currentMessageData.remaining()];
                         currentMessageData.get(0, payload);
 
+                        if (header.message.typeId == 8) {
+                            audioPackets++;
+                            audioBytes += payload.length;
+                        } else {
+                            videoPackets++;
+                            videoBytes += payload.length;
+                            if (payload.length >= 2 && (payload[1] & 0xFF) == 0) {
+                                keyframeCount++;
+                                if (lastKeyframeTimestamp >= 0) {
+                                    long interval = header.message.timestamp - lastKeyframeTimestamp;
+                                    if (interval > maxKeyframeInterval) {
+                                        maxKeyframeInterval = interval;
+                                    }
+                                }
+                                lastKeyframeTimestamp = header.message.timestamp;
+                            }
+                        }
+                        if (firstMediaTimestamp < 0) {
+                            firstMediaTimestamp = header.message.timestamp;
+                        }
+                        if (header.message.timestamp < maxSeenTimestamp && maxSeenTimestamp > 0) {
+                            droppedPackets++;
+                        }
+                        maxSeenTimestamp = Math.max(maxSeenTimestamp, header.message.timestamp);
+                        lastMediaTimestamp = header.message.timestamp;
+
                         if (ffmpegProcess == null) {
                             startFfmpeg();
                         }
@@ -216,6 +260,7 @@ public class ClientSession {
                         }
 
                         writeFlvTag(ffmpegProcess.getOutputStream(), (byte) header.message.typeId, header.message.timestamp, payload);
+                        bytesToFfmpeg += 11 + payload.length + 4;
                         break;
                     case 15:
                         log.info("[{}] Process AMF3 Command message", connectionId);
@@ -439,6 +484,9 @@ public class ClientSession {
 
                     server.registerStream(streamName, this);
                     log.info("[{}] Stream registered: {}", connectionId, streamName);
+
+                    this.streamStartWallTime = System.currentTimeMillis();
+                    startStatsReporter();
                 }
                 break;
 
@@ -726,6 +774,21 @@ public class ClientSession {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     ffmpegLog.info("[{}] {}", connectionId, line);
+                    if (line.contains("fps=")) {
+                        try {
+                            int fpsIdx = line.indexOf("fps=");
+                            ffmpegFps = line.substring(fpsIdx + 4).trim().split("\\s+")[0];
+                            int brIdx = line.indexOf("bitrate=");
+                            if (brIdx >= 0) {
+                                ffmpegBitrate = line.substring(brIdx + 8).trim().split("\\s+")[0];
+                            }
+                            int spIdx = line.indexOf("speed=");
+                            if (spIdx >= 0) {
+                                ffmpegSpeed = line.substring(spIdx + 6).trim().split("\\s+")[0];
+                            }
+                        } catch (Exception ignore) {
+                        }
+                    }
                 }
             } catch (IOException ignored) {
             }
@@ -744,9 +807,114 @@ public class ClientSession {
         log.info("[{}] Written master playlist for stream: {}", connectionId, streamName);
     }
 
+    // ─── Statistics ───────────────────────────────────────────────
+
+    private void startStatsReporter() {
+        streaming = true;
+        Thread.ofVirtual().start(() -> {
+            while (streaming && !socket.isClosed()) {
+                try {
+                    Thread.sleep(10000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (streaming && !socket.isClosed()) {
+                    logStats();
+                }
+            }
+        });
+    }
+
+    private void logStats() {
+        if (streamStartWallTime == 0) return;
+        long uptimeSec = (System.currentTimeMillis() - streamStartWallTime) / 1000;
+        long delayMs = 0;
+        if (firstMediaTimestamp >= 0) {
+            delayMs = (System.currentTimeMillis() - streamStartWallTime) - (lastMediaTimestamp - firstMediaTimestamp);
+            if (delayMs < 0) delayMs = 0;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("STATS | uptime=").append(uptimeSec).append("s");
+        sb.append(" | audio=").append(audioPackets).append("p/").append(formatBytes(audioBytes));
+        sb.append(" | video=").append(videoPackets).append("p/").append(formatBytes(videoBytes));
+        sb.append(" | kf=").append(keyframeCount);
+        sb.append(" | delay=").append(String.format("%.1fs", delayMs / 1000.0));
+        sb.append(" | lost=").append(droppedPackets);
+        if (ffmpegFps != null || ffmpegBitrate != null) {
+            sb.append(" | ffmpeg={");
+            if (ffmpegFps != null) sb.append("fps=").append(ffmpegFps).append(",");
+            if (ffmpegBitrate != null) sb.append("bitrate=").append(ffmpegBitrate).append(",");
+            if (ffmpegSpeed != null) sb.append("speed=").append(ffmpegSpeed);
+            sb.append("}");
+        }
+        log.info("[{}] {}", connectionId, sb.toString());
+    }
+
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("streamName", streamName != null ? streamName : "unknown");
+        stats.put("connectionId", connectionId);
+        stats.put("connectionIp", connectionIp);
+
+        if (streamStartWallTime > 0) {
+            long elapsed = System.currentTimeMillis() - streamStartWallTime;
+            stats.put("uptimeSec", elapsed / 1000);
+            if (firstMediaTimestamp >= 0) {
+                long rtmpElapsed = lastMediaTimestamp - firstMediaTimestamp;
+                long delayMs = elapsed - rtmpElapsed;
+                stats.put("delayMs", Math.max(0, delayMs));
+                stats.put("rtmpElapsedMs", rtmpElapsed);
+            }
+        }
+
+        stats.put("audioPackets", audioPackets);
+        stats.put("videoPackets", videoPackets);
+        stats.put("audioBytes", audioBytes);
+        stats.put("videoBytes", videoBytes);
+        stats.put("audioBytesHuman", formatBytes(audioBytes));
+        stats.put("videoBytesHuman", formatBytes(videoBytes));
+        stats.put("totalBytesToFfmpeg", bytesToFfmpeg);
+        stats.put("bytesToFfmpegHuman", formatBytes(bytesToFfmpeg));
+        stats.put("keyframeCount", keyframeCount);
+        stats.put("maxKeyframeIntervalMs", maxKeyframeInterval);
+        stats.put("droppedPackets", droppedPackets);
+
+        if (ffmpegFps != null) stats.put("ffmpegFps", ffmpegFps);
+        if (ffmpegBitrate != null) stats.put("ffmpegBitrate", ffmpegBitrate);
+        if (ffmpegSpeed != null) stats.put("ffmpegSpeed", ffmpegSpeed);
+
+        if (streamStartWallTime > 0) {
+            long elapsedSec = (System.currentTimeMillis() - streamStartWallTime) / 1000;
+            if (elapsedSec > 0) {
+                long totalBytes = audioBytes + videoBytes;
+                long bps = totalBytes / elapsedSec;
+                stats.put("bitrateBps", bps);
+                stats.put("bitrateHuman", formatBitrate(bps * 8));
+            }
+        }
+
+        return stats;
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes < 1024) return bytes + "B";
+        if (bytes < 1024 * 1024) return String.format("%.1fKB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1fMB", bytes / (1024.0 * 1024));
+        return String.format("%.1fGB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    private static String formatBitrate(long bps) {
+        if (bps < 1000) return bps + "bps";
+        if (bps < 1000_000) return String.format("%.1fKbps", bps / 1000.0);
+        return String.format("%.1fMbps", bps / 1000_000.0);
+    }
+
     // ─── Cleanup ─────────────────────────────────────────────────
 
     private void cleanup() {
+        streaming = false;
+        logStats();
         if (ffmpegProcess != null) {
             try {
                 ffmpegProcess.getOutputStream().close();
