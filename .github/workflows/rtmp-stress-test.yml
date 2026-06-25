@@ -81,7 +81,7 @@ jobs:
           RES=${{ inputs.resolution || '1280x720' }}
           BR=${{ inputs.bitrate || '2500k' }}
 
-          echo "Bot ${{ matrix.bot_id }} → rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}"
+          echo "Bot ${{ matrix.bot_id }} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
           echo "Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
 
           ffmpeg \
@@ -91,7 +91,7 @@ jobs:
             -c:v libx264 -preset ultrafast -tune zerolatency -b:v "${BR}" \
             -c:a aac -b:a 64k \
             -f flv \
-            "rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}" 2>&1 \
+            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
           | tee "ffmpeg-bot-${{ matrix.bot_id }}.log"
 
       - name: Upload FFmpeg logs
@@ -118,7 +118,7 @@ jobs:
       - name: Run burst bot
         run: |
           STREAM_KEY="burst-${GITHUB_RUN_ID}-${{ matrix.bot_id }}-$(openssl rand -hex 4)"
-          echo "Burst bot ${{ matrix.bot_id }}/20 → rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}"
+          echo "Burst bot ${{ matrix.bot_id }}/20 → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
 
           ffmpeg \
             -re \
@@ -127,7 +127,7 @@ jobs:
             -c:v libx264 -preset ultrafast -tune zerolatency -b:v 800k \
             -c:a aac -b:a 48k \
             -f flv \
-            "rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}" 2>&1 \
+            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
           | tee "ffmpeg-burst-${{ matrix.bot_id }}.log"
 
       - name: Upload burst logs
