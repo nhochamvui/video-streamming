@@ -91,7 +91,7 @@ jobs:
             -c:v libx264 -preset ultrafast -tune zerolatency -b:v "${BR}" \
             -c:a aac -b:a 64k \
             -f flv \
-            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
+            "rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}" 2>&1 \
           | tee "ffmpeg-bot-${{ matrix.bot_id }}.log"
 
       - name: Upload FFmpeg logs
@@ -118,7 +118,7 @@ jobs:
       - name: Run burst bot
         run: |
           STREAM_KEY="burst-${GITHUB_RUN_ID}-${{ matrix.bot_id }}-$(openssl rand -hex 4)"
-          echo "Burst bot ${{ matrix.bot_id }}/20 → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
+          echo "Burst bot ${{ matrix.bot_id }}/20 → rtmp://${RTMP_HOST}:${RTMP_PORT}/${STREAM_KEY}"
 
           ffmpeg \
             -re \
