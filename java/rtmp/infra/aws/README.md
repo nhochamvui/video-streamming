@@ -27,6 +27,13 @@ aws ssm put-parameter \
   --value '<at-least-32-random-bytes>'
 ```
 
+For GitHub Actions deployment, also configure:
+
+- Repository secret `AWS_GITHUB_DEPLOY_ROLE_ARN`: IAM role ARN trusted by GitHub OIDC.
+- CDK bootstrap in the target account/region: `npx cdk bootstrap aws://<account>/<region>`.
+
+The workflow `.github/workflows/rtmp-aws-deploy.yml` builds the app image, pushes it to ECR repository `rtmp-demo`, then runs CDK `synth`, `deploy`, or `destroy` from manual dispatch inputs.
+
 ## Cheap Mode
 
 Install and synthesize:
