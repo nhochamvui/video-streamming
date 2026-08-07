@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Stack } from 'aws-cdk-lib';
-import { LaunchTemplate, Peer, Port, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { Peer, Port, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { AsgCapacityProvider, AwsLogDriver, Cluster, ContainerImage, Ec2Service, Ec2TaskDefinition, EcsOptimizedImage, NetworkMode, Secret } from 'aws-cdk-lib/aws-ecs';
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
@@ -52,17 +52,13 @@ export class CheapEcsEc2Stack extends Stack {
       ]
     });
 
-    const launchTemplate = new LaunchTemplate(this, 'EcsLaunchTemplate', {
+    const autoScalingGroup = new AutoScalingGroup(this, 'EcsCapacity', {
+      vpc,
       instanceType: config.instanceType,
       machineImage: EcsOptimizedImage.amazonLinux2023(),
       role: instanceRole,
       securityGroup,
-      userData
-    });
-
-    const autoScalingGroup = new AutoScalingGroup(this, 'EcsCapacity', {
-      vpc,
-      launchTemplate,
+      userData,
       minCapacity: 1,
       maxCapacity: 1,
       desiredCapacity: 1,
