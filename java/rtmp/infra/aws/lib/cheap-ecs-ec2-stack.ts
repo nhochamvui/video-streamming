@@ -42,7 +42,7 @@ export class CheapEcsEc2Stack extends Stack {
     const userData = UserData.forLinux();
     userData.addCommands(
       'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
-      'echo ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"] >> /etc/ecs/ecs.config'
+      'echo \'ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"]\' >> /etc/ecs/ecs.config'
     );
 
     const instanceRole = new Role(this, 'EcsInstanceRole', {
