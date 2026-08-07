@@ -85,8 +85,8 @@ export class CheapEcsEc2Stack extends Stack {
       assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com')
     });
     storage.bucket.grantReadWrite(taskRole);
-    taskRole.addToPolicy(new PolicyStatement({
-      actions: ['ssm:GetParameter'],
+    executionRole.addToPolicy(new PolicyStatement({
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/rtmp/demo/hmac-secret`]
     }));
 
@@ -106,6 +106,7 @@ export class CheapEcsEc2Stack extends Stack {
       cluster,
       taskDefinition: redisTask,
       desiredCount: 1,
+      circuitBreaker: { rollback: false },
       capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
     });
 
@@ -137,6 +138,7 @@ export class CheapEcsEc2Stack extends Stack {
       cluster,
       taskDefinition: nginxTask,
       desiredCount: 1,
+      circuitBreaker: { rollback: false },
       capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
     });
 
@@ -175,6 +177,7 @@ export class CheapEcsEc2Stack extends Stack {
 
       const uploader = taskDefinition.addContainer('hls-uploader', {
         image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:2'),
+        essential: false,
         memoryReservationMiB: 96,
         entryPoint: ['sh', '-c'],
         command: [`while true; do aws s3 sync /app/hls s3://${storage.bucket.bucketName}/hls/ --cache-control 'max-age=2'; sleep 2; done`],
@@ -186,6 +189,7 @@ export class CheapEcsEc2Stack extends Stack {
         cluster,
         taskDefinition,
         desiredCount: 1,
+        circuitBreaker: { rollback: false },
         capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
       });
     }

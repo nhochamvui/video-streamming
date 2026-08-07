@@ -85,8 +85,8 @@ export class ManagedEcsFargateStack extends Stack {
       assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com')
     });
     storage.bucket.grantReadWrite(taskRole);
-    taskRole.addToPolicy(new PolicyStatement({
-      actions: ['ssm:GetParameter'],
+    executionRole.addToPolicy(new PolicyStatement({
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/rtmp/demo/hmac-secret`]
     }));
 
@@ -128,6 +128,7 @@ export class ManagedEcsFargateStack extends Stack {
 
     const uploader = taskDefinition.addContainer('hls-uploader', {
       image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:2'),
+      essential: false,
       memoryReservationMiB: 96,
       entryPoint: ['sh', '-c'],
       command: [`while true; do aws s3 sync /app/hls s3://${storage.bucket.bucketName}/hls/ --cache-control 'max-age=2'; sleep 2; done`],
@@ -140,6 +141,7 @@ export class ManagedEcsFargateStack extends Stack {
       taskDefinition,
       desiredCount: config.desiredAppCount,
       assignPublicIp: true,
+      circuitBreaker: { rollback: false },
       securityGroups: [serviceSecurityGroup],
       vpcSubnets: { subnetType: SubnetType.PUBLIC }
     });
