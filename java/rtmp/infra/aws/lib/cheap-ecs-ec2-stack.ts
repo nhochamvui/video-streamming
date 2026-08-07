@@ -45,9 +45,17 @@ export class CheapEcsEc2Stack extends Stack {
       'echo ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"] >> /etc/ecs/ecs.config'
     );
 
+    const instanceRole = new Role(this, 'EcsInstanceRole', {
+      assumedBy: new ServicePrincipal('ec2.amazonaws.com'),
+      managedPolicies: [
+        ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonEC2ContainerServiceforEC2Role')
+      ]
+    });
+
     const launchTemplate = new LaunchTemplate(this, 'EcsLaunchTemplate', {
       instanceType: config.instanceType,
       machineImage: EcsOptimizedImage.amazonLinux2023(),
+      role: instanceRole,
       securityGroup,
       userData
     });
