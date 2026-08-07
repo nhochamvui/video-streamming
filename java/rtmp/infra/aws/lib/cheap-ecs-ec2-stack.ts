@@ -176,7 +176,7 @@ export class CheapEcsEc2Stack extends Stack {
       appContainer.addMountPoints({ containerPath: '/app/hls', sourceVolume: hlsVolumeName, readOnly: false });
 
       const uploader = taskDefinition.addContainer('hls-uploader', {
-        image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:2'),
+        image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:latest'),
         essential: false,
         memoryReservationMiB: 96,
         entryPoint: ['sh', '-c'],

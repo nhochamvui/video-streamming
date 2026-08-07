@@ -177,6 +177,79 @@ jobs:
             -c enableNlb="${{ inputs.enable_nlb }}" \
             -c enableElastiCache="${{ inputs.enable_elasticache }}"
 
+      - name: Stop ECS services before destroy
+        if: ${{ inputs.action == 'destroy' }}
+        run: |
+          if [ "${{ inputs.deploy_mode }}" = "managed" ]; then
+            STACK_NAME="RtmpManagedDemoStack"
+          else
+            STACK_NAME="RtmpCheapDemoStack"
+          fi
+
+          if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            echo "Stack $STACK_NAME does not exist; skipping ECS service drain."
+            exit 0
+          fi
+
+          CLUSTER=$(
+            aws cloudformation describe-stack-resources \
+              --stack-name "$STACK_NAME" \
+              --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId | [0]" \
+              --output text
+          )
+          if [ -z "$CLUSTER" ] || [ "$CLUSTER" = "None" ]; then
+            echo "No ECS cluster found in $STACK_NAME; skipping ECS service drain."
+            exit 0
+          fi
+
+          mapfile -t SERVICES < <(
+            aws cloudformation describe-stack-resources \
+              --stack-name "$STACK_NAME" \
+              --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" \
+              --output text | tr '\t' '\n'
+          )
+
+          ACTIVE_SERVICES=()
+          for SERVICE in "${SERVICES[@]}"; do
+            if [ -z "$SERVICE" ] || [ "$SERVICE" = "None" ]; then
+              continue
+            fi
+            echo "Scaling ECS service $SERVICE to 0."
+            if aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 0 >/dev/null; then
+              ACTIVE_SERVICES+=("$SERVICE")
+            else
+              echo "Could not scale $SERVICE; it may already be deleting."
+            fi
+          done
+
+          if [ "${#ACTIVE_SERVICES[@]}" -gt 0 ]; then
+            aws ecs wait services-stable --cluster "$CLUSTER" --services "${ACTIVE_SERVICES[@]}"
+          fi
+
+          mapfile -t TASKS < <(
+            {
+              aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING --query "taskArns" --output text
+              aws ecs list-tasks --cluster "$CLUSTER" --desired-status PENDING --query "taskArns" --output text
+            } | tr '\t' '\n'
+          )
+
+          ACTIVE_TASKS=()
+          for TASK in "${TASKS[@]}"; do
+            if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then
+              continue
+            fi
+            echo "Stopping ECS task $TASK."
+            if aws ecs stop-task --cluster "$CLUSTER" --task "$TASK" --reason "GitHub Actions destroy cleanup" >/dev/null; then
+              ACTIVE_TASKS+=("$TASK")
+            else
+              echo "Could not stop $TASK; it may already be stopping."
+            fi
+          done
+
+          if [ "${#ACTIVE_TASKS[@]}" -gt 0 ]; then
+            aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "${ACTIVE_TASKS[@]}"
+          fi
+
       - name: CDK destroy
         if: ${{ inputs.action == 'destroy' }}
         working-directory: ${{ env.INFRA_DIR }}

@@ -127,7 +127,7 @@ export class ManagedEcsFargateStack extends Stack {
     }
 
     const uploader = taskDefinition.addContainer('hls-uploader', {
-      image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:2'),
+      image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:latest'),
       essential: false,
       memoryReservationMiB: 96,
       entryPoint: ['sh', '-c'],
