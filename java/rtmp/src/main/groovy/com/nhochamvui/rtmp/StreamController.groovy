@@ -18,38 +18,237 @@ class StreamController {
     @Get(produces = MediaType.TEXT_HTML)
     String index() {
         def streamNames = server.activeStreamNames
-        if (streamNames.isEmpty()) {
-            return """<!DOCTYPE html>
-            <html>
-            <head><title>RTMP Server</title></head>
-            <body style="font-family: monospace; padding: 2em;">
-                <h1>RTMP Server</h1>
-                <p>No active streams.</p>
-            </body>
-            </html>"""
-        }
         def links = streamNames.collect { name ->
-            """<li><a href="/${name}">${name}</a></li>"""
+            String safeName = html(name)
+            return """<li><a href="/${safeName}">${safeName}</a></li>"""
         }.join("\n")
+        def streamList = streamNames.isEmpty()
+                ? """<p class="empty">No active streams.</p>"""
+                : """<ul class="stream-list">${links}</ul>"""
         return """<!DOCTYPE html>
-        <html>
-        <head><title>RTMP Streams</title></head>
-        <body style="font-family: monospace; padding: 2em;">
-            <h1>Active Streams</h1>
-            <ul>${links}</ul>
-        </body>
-        </html>"""
+<html>
+<head>
+    <title>RTMP Server</title>
+    <meta charset="utf-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #101418;
+            color: #e5edf3;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            padding: 32px;
+        }
+        main { max-width: 960px; margin: 0 auto; }
+        h1 { font-size: 22px; margin: 0 0 8px; }
+        h2 { font-size: 15px; margin: 0 0 14px; color: #aab7c4; }
+        p { margin: 0; }
+        .section {
+            border: 1px solid #2d3741;
+            background: #171d23;
+            border-radius: 8px;
+            padding: 18px;
+            margin-top: 20px;
+        }
+        .intro { color: #aab7c4; margin-bottom: 16px; line-height: 1.5; }
+        button, .button-link {
+            appearance: none;
+            border: 1px solid #3d8bfd;
+            background: #1f6feb;
+            color: white;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font: inherit;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 36px;
+        }
+        button.secondary, .button-link.secondary {
+            background: #222a32;
+            border-color: #3a4652;
+            color: #d7e0e8;
+        }
+        button:disabled, .button-link.disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+        .result {
+            display: none;
+            margin-top: 16px;
+            gap: 12px;
+        }
+        .result.visible { display: grid; }
+        .field {
+            display: grid;
+            grid-template-columns: 140px minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: center;
+            padding: 10px;
+            border: 1px solid #2d3741;
+            border-radius: 6px;
+            background: #101418;
+        }
+        .label { color: #8f9daa; font-size: 12px; text-transform: uppercase; }
+        code {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            color: #f0f6fc;
+            font-size: 13px;
+        }
+        .status { margin-top: 12px; min-height: 20px; color: #aab7c4; }
+        .status.error { color: #ff8d8d; }
+        .status.ok { color: #7ee787; }
+        .empty { color: #8f9daa; }
+        .stream-list { margin: 0; padding-left: 22px; }
+        a { color: #79c0ff; }
+        @media (max-width: 720px) {
+            body { padding: 18px; }
+            .field { grid-template-columns: 1fr; }
+            button, .button-link { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>RTMP Server</h1>
+    <p class="intro">Create a temporary stream session, then paste the server URL and stream key into OBS.</p>
+
+    <section class="section">
+        <h2>Streamer Setup</h2>
+        <button id="createSession" type="button">Create stream session</button>
+        <div id="status" class="status"></div>
+        <div id="sessionResult" class="result" aria-live="polite">
+            <div class="field">
+                <span class="label">Server URL</span>
+                <code id="serverUrl"></code>
+                <button class="secondary" type="button" data-copy="serverUrl">Copy</button>
+            </div>
+            <div class="field">
+                <span class="label">Stream Key</span>
+                <code id="streamKey"></code>
+                <button class="secondary" type="button" data-copy="streamKey">Copy</button>
+            </div>
+            <div class="field">
+                <span class="label">Playback URL</span>
+                <code id="playbackUrl"></code>
+                <a id="openPlayback" class="button-link secondary" href="#" target="_blank" rel="noopener">Open</a>
+            </div>
+            <div class="field">
+                <span class="label">Expires In</span>
+                <code id="expiresIn">--</code>
+                <button id="newSession" class="secondary" type="button">Generate new</button>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2>Active Streams</h2>
+        ${streamList}
+    </section>
+</main>
+<script>
+    let expiresAt = 0;
+    let countdownTimer = null;
+    let currentSession = null;
+
+    const createButton = document.getElementById('createSession');
+    const newButton = document.getElementById('newSession');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('sessionResult');
+
+    createButton.addEventListener('click', createStreamSession);
+    newButton.addEventListener('click', createStreamSession);
+    document.querySelectorAll('[data-copy]').forEach(button => {
+        button.addEventListener('click', () => copyValue(button.dataset.copy, button));
+    });
+
+    async function createStreamSession() {
+        setStatus('Creating stream session...', '');
+        setBusy(true);
+        try {
+            const response = await fetch('/api/v1/stream-sessions', { method: 'POST' });
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(body.error || 'Could not create stream session');
+            }
+            currentSession = body;
+            document.getElementById('serverUrl').textContent = body.serverUrl || '';
+            document.getElementById('streamKey').textContent = body.streamKey || '';
+            document.getElementById('playbackUrl').textContent = body.playbackUrl || '';
+            document.getElementById('openPlayback').href = body.playbackUrl || '#';
+            resultEl.classList.add('visible');
+            expiresAt = Date.now() + ((body.expiresInSeconds || 0) * 1000);
+            startCountdown();
+            setStatus('Stream key created. Start publishing before it expires.', 'ok');
+        } catch (error) {
+            setStatus(error.message, 'error');
+        } finally {
+            setBusy(false);
+        }
     }
 
-    @Get("/{streamKey}")
+    function startCountdown() {
+        clearInterval(countdownTimer);
+        updateCountdown();
+        countdownTimer = setInterval(updateCountdown, 1000);
+    }
+
+    function updateCountdown() {
+        const remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+        const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
+        const seconds = String(remaining % 60).padStart(2, '0');
+        document.getElementById('expiresIn').textContent = minutes + ':' + seconds;
+        if (remaining === 0 && currentSession) {
+            clearInterval(countdownTimer);
+            currentSession = null;
+            document.querySelectorAll('[data-copy]').forEach(button => button.disabled = true);
+            document.getElementById('openPlayback').classList.add('disabled');
+            document.getElementById('openPlayback').removeAttribute('href');
+            setStatus('This stream key has expired. Generate a new session before publishing.', 'error');
+        } else {
+            document.querySelectorAll('[data-copy]').forEach(button => button.disabled = false);
+            document.getElementById('openPlayback').classList.remove('disabled');
+        }
+    }
+
+    async function copyValue(id, button) {
+        const value = document.getElementById(id).textContent;
+        if (!value || !currentSession) return;
+        await navigator.clipboard.writeText(value);
+        const original = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => button.textContent = original, 1200);
+    }
+
+    function setBusy(busy) {
+        createButton.disabled = busy;
+        newButton.disabled = busy;
+    }
+
+    function setStatus(message, type) {
+        statusEl.textContent = message;
+        statusEl.className = 'status' + (type ? ' ' + type : '');
+    }
+</script>
+</body>
+</html>"""
+    }
+
+    @Get("/{playbackId}")
     @Produces(MediaType.TEXT_HTML)
-    String streamPlayer(String streamKey) {
-        if (!server.hasStream(streamKey)) {
+    String streamPlayer(String playbackId) {
+        String safePlaybackId = html(playbackId)
+        if (!server.hasStream(playbackId)) {
             return """<!DOCTYPE html>
         <html>
         <head><title>Stream Not Found</title></head>
         <body style="font-family: monospace; padding: 2em;">
-            <h1>Stream not found: ${streamKey}</h1>
+            <h1>Stream not found: ${safePlaybackId}</h1>
             <p><a href="/">Back to stream list</a></p>
         </body>
         </html>"""
@@ -57,7 +256,7 @@ class StreamController {
                 return """<!DOCTYPE html>
         <html>
         <head>
-            <title>Live Stream - ${streamKey}</title>
+            <title>Live Stream - ${safePlaybackId}</title>
             <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
             <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
             <style>
@@ -87,7 +286,7 @@ class StreamController {
                         nativeVideoTracks: false
                     },
                     sources: [{
-                        src: '/hls/${streamKey}/master.m3u8',
+                        src: '/hls/${safePlaybackId}/master.m3u8',
                         type: 'application/x-mpegURL'
                     }]
                 });
@@ -116,12 +315,12 @@ class StreamController {
         ]
     }
 
-    @Get("/stats/{streamKey}")
+    @Get("/stats/{playbackId}")
     @Produces(MediaType.APPLICATION_JSON)
-    Map streamStats(String streamKey) {
-        def session = server.activeStreams[streamKey]
+    Map streamStats(String playbackId) {
+        def session = server.activeStreams[playbackId]
         if (!session) {
-            return [error: "Stream not found", streamKey: streamKey]
+            return [error: "Stream not found", playbackId: playbackId]
         }
         return session.statistics
     }
@@ -205,7 +404,7 @@ class StreamController {
                     let ff = '--';
                     if (s.ffmpegFps || s.ffmpegSpeed) ff = (s.ffmpegFps||'?') + 'fps/' + (s.ffmpegSpeed||'?');
                     return '<tr>' +
-                        '<td><a href="/' + name + '">' + name + '</a></td>' +
+                        '<td><a href="/' + encodeURIComponent(name) + '">' + esc(name) + '</a></td>' +
                         '<td>' + fmtUp(uptime) + '</td>' +
                         '<td>' + (s.audioPackets||0) + 'p / ' + (s.audioBytesHuman||'0B') + '</td>' +
                         '<td>' + (s.videoPackets||0) + 'p / ' + (s.videoBytesHuman||'0B') + '</td>' +
@@ -219,6 +418,9 @@ class StreamController {
             } catch(e) { console.error(e); }
         }
         function fmtUp(s) { const h=Math.floor(s/3600), m=Math.floor((s%3600)/60); return h?h+'h '+m+'m':m?m+'m '+s%60+'s':s+'s'; }
+        function esc(s) {
+            return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+        }
         refresh();
         setInterval(refresh, 5000);
     </script>
@@ -231,5 +433,14 @@ class StreamController {
     String version() {
         String v = getClass().getPackage().getImplementationVersion()
         return v != null ? v : "unknown"
+    }
+
+    private static String html(Object value) {
+        return String.valueOf(value)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;")
     }
 }

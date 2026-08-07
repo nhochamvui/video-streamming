@@ -1,6 +1,11 @@
 package com.nhochamvui.rtmp.core;
 
 import jakarta.inject.Singleton;
+import com.nhochamvui.rtmp.session.NodeRegistry;
+import com.nhochamvui.rtmp.session.SafePlaybackPath;
+import com.nhochamvui.rtmp.session.StreamSessionService;
+import io.micronaut.context.annotation.Value;
+import io.micronaut.scheduling.annotation.Scheduled;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -16,21 +21,37 @@ public class Server {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Server.class);
 
     private final ConcurrentHashMap<String, ClientSession> streams = new ConcurrentHashMap<>();
+    private final StreamSessionService streamSessionService;
+    private final SafePlaybackPath safePlaybackPath;
+    private final NodeRegistry nodeRegistry;
+    private final String serverId;
+    private final int port;
 
-    public Server() {
-        log.info("RTMP Server initialized");
+    public Server(
+            StreamSessionService streamSessionService,
+            SafePlaybackPath safePlaybackPath,
+            NodeRegistry nodeRegistry,
+            @Value("${rtmp.server-id:local-node}") String serverId,
+            @Value("${rtmp.port:1935}") int port
+    ) {
+        this.streamSessionService = streamSessionService;
+        this.safePlaybackPath = safePlaybackPath;
+        this.nodeRegistry = nodeRegistry;
+        this.serverId = serverId;
+        this.port = port;
+        log.info("RTMP Server initialized | serverId={} | port={}", serverId, port);
     }
 
     public void listen() {
-        try (ServerSocket serverSocket = new ServerSocket(1935, 50, InetAddress.getByName("0.0.0.0"))) {
+        try (ServerSocket serverSocket = new ServerSocket(port, 50, InetAddress.getByName("0.0.0.0"))) {
             serverSocket.setReuseAddress(true);
-            log.info("RTMP server is listening on port 1935...");
+            log.info("RTMP server is listening on port {}...", port);
             while (true) {
                 try {
                     Socket socket = serverSocket.accept();
                     Thread.ofVirtual().start(() -> {
                         try (socket) {
-                            new ClientSession(socket, Server.this).run();
+                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId).run();
                         } catch (Exception e) {
                             log.error("ClientSession fatal error", e);
                         }
@@ -44,12 +65,13 @@ public class Server {
         }
     }
 
-    void registerStream(String name, ClientSession session) {
-        ClientSession old = streams.put(name, session);
-        if (old != null) {
-            log.info("Kicking previous streamer for key: {}", name);
-            old.close();
+    boolean registerStream(String name, ClientSession session) {
+        ClientSession old = streams.putIfAbsent(name, session);
+        if (old != null && old != session) {
+            log.warn("Reject duplicate publisher for playbackId={}", name);
+            return false;
         }
+        return true;
     }
 
     void unregisterStream(String name, ClientSession session) {
@@ -66,5 +88,14 @@ public class Server {
 
     public Map<String, ClientSession> getActiveStreams() {
         return Map.copyOf(streams);
+    }
+
+    @Scheduled(fixedDelay = "10s", initialDelay = "1s")
+    void heartbeatNode() {
+        try {
+            nodeRegistry.heartbeat(streams.size());
+        } catch (Exception e) {
+            log.warn("Failed to heartbeat RTMP node: {}", e.getMessage());
+        }
     }
 }

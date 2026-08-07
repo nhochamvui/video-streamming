@@ -6,9 +6,13 @@ import com.nhochamvui.rtmp.core.models.AMF0Message;
 import com.nhochamvui.rtmp.core.models.Basic;
 import com.nhochamvui.rtmp.core.models.Message;
 import com.nhochamvui.rtmp.core.models.RTMPHeader;
+import com.nhochamvui.rtmp.session.PublishValidation;
+import com.nhochamvui.rtmp.session.SafePlaybackPath;
+import com.nhochamvui.rtmp.session.StreamSessionService;
 import groovy.lang.Tuple2;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import org.slf4j.MDC;
 
 import java.io.*;
 import java.net.Socket;
@@ -38,6 +42,9 @@ public class ClientSession {
     private final InputStream inputStream;
     private final OutputStream outputStream;
     private final Server server;
+    private final StreamSessionService streamSessionService;
+    private final SafePlaybackPath safePlaybackPath;
+    private final String serverId;
     private final String connectionId;
     private final String connectionIp;
     private final long connectionStartTime;
@@ -50,6 +57,8 @@ public class ClientSession {
 
     private int nextStreamId = 1;
     private String streamName;
+    private String sessionLookupKey;
+    private String keyFingerprint;
     private String hlsBaseDir;
 
     private Process ffmpegProcess;
@@ -73,9 +82,12 @@ public class ClientSession {
     private volatile String ffmpegSpeed;
     private volatile boolean streaming;
 
-    public ClientSession(Socket socket, Server server) throws IOException {
+    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId) throws IOException {
         this.socket = socket;
         this.server = server;
+        this.streamSessionService = streamSessionService;
+        this.safePlaybackPath = safePlaybackPath;
+        this.serverId = serverId;
         this.socket.setTcpNoDelay(true);
         this.socket.setSoTimeout(5000);
         this.connectionStartTime = System.currentTimeMillis();
@@ -87,6 +99,9 @@ public class ClientSession {
 
     public void run() {
         try {
+            MDC.put("serverId", serverId);
+            MDC.put("connectionId", connectionId);
+            MDC.put("publisherIp", connectionIp);
             log.info("[{}] RTMP connection accepted from {}", connectionId, connectionIp);
             handleHandShake();
             prevHeaders.clear();
@@ -114,6 +129,7 @@ public class ClientSession {
             cleanup();
             long duration = System.currentTimeMillis() - connectionStartTime;
             log.info("[{}] RTMP connection closed | duration={}ms | IP={}", connectionId, duration, connectionIp);
+            MDC.clear();
         }
     }
 
@@ -274,7 +290,6 @@ public class ClientSession {
                             final Object message = decodeAMF0CommandMessage(currentMessageData);
                             messages.add(message);
                         }
-                        log.info("[{}] Finished decoding AMF0 command message: {}", connectionId, messages);
                         String commandName = messages.isEmpty() ? "UNKNOWN" : messages.getFirst().toString();
                         log.info("[{}] >>> Received command: {}", connectionId, commandName);
                         handleCommandMessage(messages, header.message.streamId);
@@ -465,28 +480,39 @@ public class ClientSession {
                             ? messages.get(3).toString() : "stream";
                     String publishType = messages.size() > 4 && messages.get(4) != null
                             ? messages.get(4).toString() : "live";
-                    log.info("[{}] Stream: {}, type: {}", connectionId, publishName, publishType);
 
-                    this.streamName = publishName;
-                    this.hlsBaseDir = "hls/" + streamName;
+                    Optional<PublishValidation> validation = streamSessionService.validatePublish(publishName, serverId, connectionId, connectionIp);
+                    if (validation.isEmpty()) {
+                        log.warn("[{}] Reject publish | type={} | keyFingerprint={}", connectionId, publishType, safeFingerprint(publishName));
+                        sendPublishStatus(messageStreamId, "error", "NetStream.Publish.BadName", "Invalid or expired stream key");
+                        throw new StreamClose();
+                    }
 
-                    Map<String, Object> info = new LinkedHashMap<>();
-                    info.put("level", "status");
-                    info.put("code", "NetStream.Publish.Start");
-                    info.put("description", "Stream is now published");
-                    List<Object> statusResult = Arrays.asList("onStatus", (double) 0, null, info);
-                    byte[] data = encodeAMF0CommandMessage(statusResult, messageStreamId);
-                    outputStream.write(data);
-                    outputStream.flush();
+                    PublishValidation authorized = validation.get();
+                    this.streamName = authorized.playbackId();
+                    this.sessionLookupKey = authorized.lookupKey();
+                    this.keyFingerprint = authorized.keyFingerprint();
+                    this.hlsBaseDir = safePlaybackPath.streamDirectory(streamName).toString();
+                    MDC.put("playbackId", streamName);
+                    log.info("[{}] Publish authorized | playbackId={} | type={} | keyFingerprint={}",
+                            connectionId, streamName, publishType, keyFingerprint);
+
+                    if (!server.registerStream(streamName, this)) {
+                        log.warn("[{}] Reject duplicate publish | playbackId={}", connectionId, streamName);
+                        streamSessionService.disconnect(sessionLookupKey, serverId, connectionId);
+                        sendPublishStatus(messageStreamId, "error", "NetStream.Publish.BadName", "Stream is already active");
+                        throw new StreamClose();
+                    }
 
                     new File(hlsBaseDir + "/hd").mkdirs();
                     writeMasterPlaylist();
 
-                    server.registerStream(streamName, this);
+                    sendPublishStatus(messageStreamId, "status", "NetStream.Publish.Start", "Stream is now published");
                     log.info("[{}] Stream registered: {}", connectionId, streamName);
 
                     this.streamStartWallTime = System.currentTimeMillis();
                     startStatsReporter();
+                    startSessionHeartbeat();
                 }
                 break;
 
@@ -498,6 +524,25 @@ public class ClientSession {
             default:
                 log.warn("[{}] Unknown command: {}", connectionId, command);
                 break;
+        }
+    }
+
+    private void sendPublishStatus(int messageStreamId, String level, String code, String description) throws IOException {
+        Map<String, Object> info = new LinkedHashMap<>();
+        info.put("level", level);
+        info.put("code", code);
+        info.put("description", description);
+        List<Object> statusResult = Arrays.asList("onStatus", (double) 0, null, info);
+        byte[] data = encodeAMF0CommandMessage(statusResult, messageStreamId);
+        outputStream.write(data);
+        outputStream.flush();
+    }
+
+    private String safeFingerprint(String publishKey) {
+        try {
+            return streamSessionService.fingerprint(publishKey);
+        } catch (Exception e) {
+            return "unknown";
         }
     }
 
@@ -768,6 +813,7 @@ public class ClientSession {
         ffmpegProcess = processBuilder.start();
 
         Thread.ofVirtual().start(() -> {
+            applyMdc();
             try {
                 java.io.BufferedReader reader = new java.io.BufferedReader(
                         new java.io.InputStreamReader(ffmpegProcess.getInputStream()));
@@ -791,6 +837,8 @@ public class ClientSession {
                     }
                 }
             } catch (IOException ignored) {
+            } finally {
+                MDC.clear();
             }
         });
 
@@ -812,6 +860,7 @@ public class ClientSession {
     private void startStatsReporter() {
         streaming = true;
         Thread.ofVirtual().start(() -> {
+            applyMdc();
             while (streaming && !socket.isClosed()) {
                 try {
                     Thread.sleep(10000);
@@ -823,7 +872,41 @@ public class ClientSession {
                     logStats();
                 }
             }
+            MDC.clear();
         });
+    }
+
+    private void startSessionHeartbeat() {
+        Thread.ofVirtual().start(() -> {
+            applyMdc();
+            while (streaming && !socket.isClosed() && sessionLookupKey != null) {
+                try {
+                    Thread.sleep(60000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (streaming && !socket.isClosed()) {
+                    boolean refreshed = streamSessionService.heartbeat(sessionLookupKey, serverId, connectionId);
+                    if (!refreshed) {
+                        log.warn("[{}] Stream session heartbeat lease lost | playbackId={} | keyFingerprint={}",
+                                connectionId, streamName, keyFingerprint);
+                        close();
+                        break;
+                    }
+                }
+            }
+            MDC.clear();
+        });
+    }
+
+    private void applyMdc() {
+        MDC.put("serverId", serverId);
+        MDC.put("connectionId", connectionId);
+        MDC.put("publisherIp", connectionIp);
+        if (streamName != null) {
+            MDC.put("playbackId", streamName);
+        }
     }
 
     private void logStats() {
@@ -940,6 +1023,9 @@ public class ClientSession {
 
         if (streamName != null) {
             server.unregisterStream(streamName, this);
+        }
+        if (sessionLookupKey != null) {
+            streamSessionService.disconnect(sessionLookupKey, serverId, connectionId);
         }
     }
 
