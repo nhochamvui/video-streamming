@@ -1,0 +1,15 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/rtmp-demo.ts",
+  "context": {
+    "deployMode": "cheap",
+    "appImage": "public.ecr.aws/docker/library/eclipse-temurin:21-jre",
+    "instanceType": "t3.micro",
+    "desiredAppCount": 1,
+    "maxAppCount": 3,
+    "enableAlb": false,
+    "enableNlb": false,
+    "enableElastiCache": false,
+    "adminCidr": "0.0.0.0/0",
+    "rtmpHost": "replace-after-deploy.example.com"
+  }
+}
