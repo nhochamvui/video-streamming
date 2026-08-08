@@ -250,6 +250,25 @@ jobs:
             aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "${ACTIVE_TASKS[@]}"
           fi
 
+          DELETED_SERVICES=()
+          for SERVICE in "${ACTIVE_SERVICES[@]}"; do
+            echo "Deleting ECS service $SERVICE before stack destroy."
+            if aws ecs delete-service --cluster "$CLUSTER" --service "$SERVICE" --force >/dev/null; then
+              DELETED_SERVICES+=("$SERVICE")
+            else
+              echo "Could not delete $SERVICE; it may already be deleting."
+            fi
+          done
+
+          if [ "${#DELETED_SERVICES[@]}" -gt 0 ]; then
+            aws ecs wait services-inactive --cluster "$CLUSTER" --services "${DELETED_SERVICES[@]}"
+          fi
+
+          echo "Detaching ECS cluster capacity providers before stack destroy."
+          aws ecs put-cluster-capacity-providers \
+            --cli-input-json "{\"cluster\":\"$CLUSTER\",\"capacityProviders\":[],\"defaultCapacityProviderStrategy\":[]}" \
+            >/dev/null || echo "Could not detach capacity providers; they may already be detached or the cluster may be deleting."
+
           mapfile -t AUTO_SCALING_GROUPS < <(
             aws cloudformation describe-stack-resources \
               --stack-name "$STACK_NAME" \
