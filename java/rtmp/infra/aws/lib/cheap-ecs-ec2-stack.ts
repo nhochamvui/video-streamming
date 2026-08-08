@@ -114,6 +114,8 @@ export class CheapEcsEc2Stack extends Stack {
       taskDefinition: redisTask,
       desiredCount: 1,
       circuitBreaker: { rollback: false },
+      minHealthyPercent: 0,
+      maxHealthyPercent: 100,
       capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
     });
 
@@ -146,6 +148,8 @@ export class CheapEcsEc2Stack extends Stack {
       taskDefinition: nginxTask,
       desiredCount: 1,
       circuitBreaker: { rollback: false },
+      minHealthyPercent: 0,
+      maxHealthyPercent: 100,
       capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
     });
 
@@ -197,6 +201,8 @@ export class CheapEcsEc2Stack extends Stack {
         taskDefinition,
         desiredCount: 1,
         circuitBreaker: { rollback: false },
+        minHealthyPercent: 0,
+        maxHealthyPercent: 100,
         capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
       });
       appService.node.addDependency(redisService);
