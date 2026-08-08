@@ -100,9 +100,16 @@ export class CheapEcsEc2Stack extends Stack {
     redisTask.addContainer('redis', {
       image: ContainerImage.fromRegistry('redis:7-alpine'),
       memoryReservationMiB: 128,
+      healthCheck: {
+        command: ['CMD-SHELL', 'redis-cli ping | grep PONG'],
+        interval: cdk.Duration.seconds(5),
+        timeout: cdk.Duration.seconds(3),
+        retries: 5,
+        startPeriod: cdk.Duration.seconds(5)
+      },
       logging: new AwsLogDriver({ streamPrefix: 'redis', logGroup })
     }).addPortMappings({ containerPort: 6379, hostPort: 6379 });
-    new Ec2Service(this, 'RedisService', {
+    const redisService = new Ec2Service(this, 'RedisService', {
       cluster,
       taskDefinition: redisTask,
       desiredCount: 1,
@@ -185,13 +192,14 @@ export class CheapEcsEc2Stack extends Stack {
       });
       uploader.addMountPoints({ containerPath: '/app/hls', sourceVolume: hlsVolumeName, readOnly: true });
 
-      new Ec2Service(this, `AppService${node + 1}`, {
+      const appService = new Ec2Service(this, `AppService${node + 1}`, {
         cluster,
         taskDefinition,
         desiredCount: 1,
         circuitBreaker: { rollback: false },
         capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
       });
+      appService.node.addDependency(redisService);
     }
 
     new cdk.CfnOutput(this, 'HttpUrl', { value: 'http://<instance-public-dns>/' });

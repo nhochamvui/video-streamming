@@ -1,8 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
+import { Duration } from 'aws-cdk-lib';
 import { Stack } from 'aws-cdk-lib';
 import { Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { CfnCacheCluster, CfnSubnetGroup } from 'aws-cdk-lib/aws-elasticache';
-import { Cluster, ContainerImage, FargateService, FargateTaskDefinition, AwsLogDriver, Secret } from 'aws-cdk-lib/aws-ecs';
+import { AwsLogDriver, Cluster, ContainerDependencyCondition, ContainerImage, FargateService, FargateTaskDefinition, Secret } from 'aws-cdk-lib/aws-ecs';
 import { ApplicationLoadBalancer, NetworkLoadBalancer } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
@@ -119,11 +120,23 @@ export class ManagedEcsFargateStack extends Stack {
     appContainer.addMountPoints({ containerPath: '/app/hls', sourceVolume: 'hls', readOnly: false });
 
     if (!config.enableElastiCache) {
-      taskDefinition.addContainer('redis', {
+      const redisContainer = taskDefinition.addContainer('redis', {
         image: ContainerImage.fromRegistry('redis:7-alpine'),
         memoryReservationMiB: 128,
+        healthCheck: {
+          command: ['CMD-SHELL', 'redis-cli ping | grep PONG'],
+          interval: Duration.seconds(5),
+          timeout: Duration.seconds(3),
+          retries: 5,
+          startPeriod: Duration.seconds(5)
+        },
         logging: new AwsLogDriver({ streamPrefix: 'redis', logGroup })
-      }).addPortMappings({ containerPort: 6379 });
+      });
+      redisContainer.addPortMappings({ containerPort: 6379 });
+      appContainer.addContainerDependencies({
+        container: redisContainer,
+        condition: ContainerDependencyCondition.HEALTHY
+      });
     }
 
     const uploader = taskDefinition.addContainer('hls-uploader', {
