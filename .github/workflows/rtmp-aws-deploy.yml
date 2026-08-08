@@ -250,6 +250,42 @@ jobs:
             aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "${ACTIVE_TASKS[@]}"
           fi
 
+          mapfile -t AUTO_SCALING_GROUPS < <(
+            aws cloudformation describe-stack-resources \
+              --stack-name "$STACK_NAME" \
+              --query "StackResources[?ResourceType=='AWS::AutoScaling::AutoScalingGroup'].PhysicalResourceId" \
+              --output text | tr '\t' '\n'
+          )
+
+          for AUTO_SCALING_GROUP in "${AUTO_SCALING_GROUPS[@]}"; do
+            if [ -z "$AUTO_SCALING_GROUP" ] || [ "$AUTO_SCALING_GROUP" = "None" ]; then
+              continue
+            fi
+            echo "Scaling Auto Scaling group $AUTO_SCALING_GROUP to 0."
+            aws autoscaling update-auto-scaling-group \
+              --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
+              --min-size 0 \
+              --desired-capacity 0
+
+            mapfile -t INSTANCE_IDS < <(
+              aws autoscaling describe-auto-scaling-groups \
+                --auto-scaling-group-names "$AUTO_SCALING_GROUP" \
+                --query "AutoScalingGroups[0].Instances[].InstanceId" \
+                --output text | tr '\t' '\n'
+            )
+
+            ACTIVE_INSTANCE_IDS=()
+            for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
+              if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+                ACTIVE_INSTANCE_IDS+=("$INSTANCE_ID")
+              fi
+            done
+
+            if [ "${#ACTIVE_INSTANCE_IDS[@]}" -gt 0 ]; then
+              aws ec2 wait instance-terminated --instance-ids "${ACTIVE_INSTANCE_IDS[@]}"
+            fi
+          done
+
       - name: CDK destroy
         if: ${{ inputs.action == 'destroy' }}
         working-directory: ${{ env.INFRA_DIR }}
