@@ -39,9 +39,9 @@ on:
         description: "Cheap-mode ECS EC2 instance type"
         required: true
         type: string
-        default: "t3.micro"
+        default: "t4g.micro"
       rtmp_host:
-        description: "RTMP host advertised to streamers. For cheap mode, redeploy with the EC2 public DNS/IP after first deploy."
+        description: "RTMP host advertised to streamers. For cheap mode, point a domain to the proxy Elastic IP output."
         required: false
         type: string
         default: "replace-after-deploy.example.com"
@@ -129,6 +129,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: java/rtmp
+          platforms: linux/arm64
           push: true
           tags: |
             ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}

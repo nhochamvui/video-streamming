@@ -6,6 +6,7 @@ export type DeployMode = 'cheap' | 'managed';
 export interface InfraConfig {
   readonly deployMode: DeployMode;
   readonly appImage: string;
+  readonly instanceTypeName: string;
   readonly instanceType: InstanceType;
   readonly desiredAppCount: number;
   readonly maxAppCount: number;
@@ -24,11 +25,13 @@ export function getConfig(app: cdk.App): InfraConfig {
 
   const maxAppCount = readNumber(app, 'maxAppCount', 3);
   const desiredAppCount = Math.min(readNumber(app, 'desiredAppCount', 1), maxAppCount);
+  const instanceTypeName = readString(app, 'instanceType', 't4g.micro');
 
   return {
     deployMode,
     appImage: readString(app, 'appImage', 'public.ecr.aws/docker/library/eclipse-temurin:21-jre'),
-    instanceType: new InstanceType(readString(app, 'instanceType', 't3.micro')),
+    instanceTypeName,
+    instanceType: new InstanceType(instanceTypeName),
     desiredAppCount,
     maxAppCount,
     enableAlb: readBoolean(app, 'enableAlb', false),

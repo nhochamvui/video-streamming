@@ -12,11 +12,13 @@ This CDK app deploys the Java RTMP demo in two cost profiles.
 Build and push the application image first:
 
 ```sh
-docker build -t rtmp-demo ../../
+docker build --platform linux/arm64 -t rtmp-demo ../../
 aws ecr create-repository --repository-name rtmp-demo
 docker tag rtmp-demo:latest <account>.dkr.ecr.<region>.amazonaws.com/rtmp-demo:latest
 docker push <account>.dkr.ecr.<region>.amazonaws.com/rtmp-demo:latest
 ```
+
+Cheap mode defaults to ARM64 app capacity on `t4g.micro`, so the app image should be built for `linux/arm64` unless you override the instance type. Use `-c instanceType=t3.micro` only with an amd64 image or a multi-arch image that includes amd64.
 
 Create the HMAC secret:
 
@@ -54,6 +56,10 @@ npx cdk deploy \
 ```
 
 Cheap mode creates a small Traefik proxy EC2 instance with an Elastic IP. Point your domain `A` record to the `ProxyElasticIp` CloudFormation output. The API and RTMP publish URLs use the stable `rtmpHost` value, so EC2 replacement does not require a redeploy just to change URLs.
+
+By default, cheap mode runs ARM64 ECS app instances on `t4g.micro` and expects the app image to include a `linux/arm64` manifest. To run x86 capacity instead, pass `-c instanceType=t3.micro` and build/push either an amd64 image or a multi-arch image.
+
+The proxy instance is `t4g.nano` because it only runs Traefik, Redis for demo metadata, Docker, and a small backend refresh timer. Keep the ECS app capacity at `t4g.micro` or larger: the app task reserves 384 MiB for the Java RTMP container plus 96 MiB for the HLS uploader, and active streams start FFmpeg processes outside the Java heap.
 
 For a one-node demo:
 

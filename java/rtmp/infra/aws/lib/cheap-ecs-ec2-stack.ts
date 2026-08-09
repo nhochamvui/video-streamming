@@ -1,7 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Stack } from 'aws-cdk-lib';
 import { AmazonLinuxCpuType, CfnEIP, CfnEIPAssociation, Instance, InstanceType, MachineImage, Peer, Port, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
-import { AsgCapacityProvider, AwsLogDriver, Cluster, ContainerImage, Ec2Service, Ec2TaskDefinition, EcsOptimizedImage, NetworkMode, PlacementConstraint, Secret } from 'aws-cdk-lib/aws-ecs';
+import { AmiHardwareType, AsgCapacityProvider, AwsLogDriver, Cluster, ContainerImage, Ec2Service, Ec2TaskDefinition, EcsOptimizedImage, NetworkMode, PlacementConstraint, Secret } from 'aws-cdk-lib/aws-ecs';
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
@@ -65,7 +65,7 @@ export class CheapEcsEc2Stack extends Stack {
     const autoScalingGroup = new AutoScalingGroup(this, 'EcsCapacity', {
       vpc,
       instanceType: config.instanceType,
-      machineImage: EcsOptimizedImage.amazonLinux2023(),
+      machineImage: EcsOptimizedImage.amazonLinux2023(ecsAmiHardwareType(config.instanceTypeName)),
       role: instanceRole,
       securityGroup,
       userData,
@@ -210,7 +210,7 @@ export class CheapEcsEc2Stack extends Stack {
 
     const proxyInstance = new Instance(this, 'ProxyInstance', {
       vpc,
-      instanceType: new InstanceType('t4g.micro'),
+      instanceType: new InstanceType('t4g.nano'),
       machineImage: MachineImage.latestAmazonLinux2023({ cpuType: AmazonLinuxCpuType.ARM_64 }),
       role: proxyRole,
       securityGroup: proxySecurityGroup,
@@ -283,4 +283,9 @@ export class CheapEcsEc2Stack extends Stack {
     new cdk.CfnOutput(this, 'RtmpUrl', { value: `rtmp://${config.rtmpHost}:1935/live` });
     new cdk.CfnOutput(this, 'DomainConfiguration', { value: `Point ${config.rtmpHost} to Elastic IP ${proxyElasticIp.ref}` });
   }
+}
+
+function ecsAmiHardwareType(instanceTypeName: string): AmiHardwareType {
+  const family = instanceTypeName.split('.')[0].toLowerCase();
+  return family === 'a1' || family.endsWith('g') ? AmiHardwareType.ARM : AmiHardwareType.STANDARD;
 }
