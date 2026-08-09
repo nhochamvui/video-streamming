@@ -4,7 +4,7 @@ This CDK app deploys the Java RTMP demo in two cost profiles.
 
 ## Modes
 
-- `cheap`: default. ECS on one public EC2 instance, Nginx, Redis container, Java RTMP tasks, S3, and CloudFront. It avoids NAT Gateway, ALB, NLB, and ElastiCache.
+- `cheap`: default. ECS on EC2 app instances behind a small Traefik proxy EC2 with an Elastic IP, plus Redis on the proxy, S3, and CloudFront. It avoids NAT Gateway, ALB, NLB, and ElastiCache.
 - `managed`: ECS Fargate, local Redis sidecar by default, S3, CloudFront, and optional ALB. Run this only for short demos unless you accept the hourly cost.
 
 ## Prerequisites
@@ -43,42 +43,47 @@ npm install
 npm run synth:cheap -- -c appImage=<account>.dkr.ecr.<region>.amazonaws.com/rtmp-demo:latest
 ```
 
-Deploy one node:
+Deploy cheap mode with a stable proxy endpoint:
 
 ```sh
 npx cdk deploy \
   -c deployMode=cheap \
   -c appImage=<account>.dkr.ecr.<region>.amazonaws.com/rtmp-demo:latest \
-  -c desiredAppCount=1
+  -c desiredAppCount=2 \
+  -c rtmpHost=rtmp.example.com
 ```
 
-After the EC2 instance is running, get its public DNS/IP from the EC2 console or CloudFormation resources, then redeploy with:
+Cheap mode creates a small Traefik proxy EC2 instance with an Elastic IP. Point your domain `A` record to the `ProxyElasticIp` CloudFormation output. The API and RTMP publish URLs use the stable `rtmpHost` value, so EC2 replacement does not require a redeploy just to change URLs.
+
+For a one-node demo:
 
 ```sh
 npx cdk deploy \
   -c deployMode=cheap \
   -c appImage=<account>.dkr.ecr.<region>.amazonaws.com/rtmp-demo:latest \
   -c desiredAppCount=1 \
-  -c rtmpHost=<instance-public-dns-or-ip>
+  -c rtmpHost=rtmp.example.com
 ```
 
-For a short scaling demo on the same EC2 host:
+For a short multi-node demo:
 
 ```sh
 npx cdk deploy \
   -c deployMode=cheap \
   -c appImage=<account>.dkr.ecr.<region>.amazonaws.com/rtmp-demo:latest \
   -c desiredAppCount=3 \
-  -c rtmpHost=<instance-public-dns-or-ip>
+  -c rtmpHost=rtmp.example.com
 ```
 
-Cheap mode maps demo nodes to:
+Cheap mode now maps app tasks to ECS EC2 instances with fixed ports:
 
-- HTTP app ports: `8888`, `8889`, `8890`
-- RTMP ports: `1935`, `1936`, `1937`
-- Nginx public HTTP: `80`
+- Public HTTP: Traefik proxy port `80`
+- Public RTMP: Traefik proxy port `1935`
+- App HTTP on each ECS EC2 instance: `8888`
+- App RTMP on each ECS EC2 instance: `1935`
+- Redis: container on the proxy EC2 private IP, port `6379`
 
-Use only one active stream on free-tier-size EC2 instances. FFmpeg remains the real CPU/RAM floor.
+`desiredAppCount` controls both the number of app tasks and the number of ECS EC2 instances. Each app task is placed on a distinct EC2 instance because all app tasks bind the same host ports. Use only one active stream per free-tier-size EC2 instance. FFmpeg remains the real CPU/RAM floor.
 
 ## Managed Mode
 
@@ -107,6 +112,7 @@ npx cdk destroy -c deployMode=managed
 
 - No NAT Gateway is created.
 - Cheap mode does not create ALB, NLB, or ElastiCache.
+- Cheap mode does create a proxy EC2 instance and an Elastic IP for stable DNS.
 - CloudWatch log retention is three days.
 - Buckets are destroyable by default for demo cleanup.
 - Public IPv4, CloudFront, S3 requests, and running compute can still create charges.

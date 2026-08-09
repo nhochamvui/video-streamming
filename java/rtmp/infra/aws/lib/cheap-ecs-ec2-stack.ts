@@ -1,7 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Stack } from 'aws-cdk-lib';
-import { Peer, Port, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
-import { AsgCapacityProvider, AwsLogDriver, Cluster, ContainerImage, Ec2Service, Ec2TaskDefinition, EcsOptimizedImage, NetworkMode, Secret } from 'aws-cdk-lib/aws-ecs';
+import { AmazonLinuxCpuType, CfnEIP, CfnEIPAssociation, Instance, InstanceType, MachineImage, Peer, Port, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { AsgCapacityProvider, AwsLogDriver, Cluster, ContainerImage, Ec2Service, Ec2TaskDefinition, EcsOptimizedImage, NetworkMode, PlacementConstraint, Secret } from 'aws-cdk-lib/aws-ecs';
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
@@ -20,6 +20,8 @@ export class CheapEcsEc2Stack extends Stack {
 
     const { config } = props;
     const storage = createHlsStorage(this);
+    const ecsInstanceCount = Math.max(1, config.desiredAppCount);
+    const appTaskCount = Math.max(1, config.desiredAppCount);
 
     const vpc = new Vpc(this, 'Vpc', {
       maxAzs: 1,
@@ -27,16 +29,24 @@ export class CheapEcsEc2Stack extends Stack {
       subnetConfiguration: [{ name: 'public', subnetType: SubnetType.PUBLIC }]
     });
 
+    const proxySecurityGroup = new SecurityGroup(this, 'ProxySecurityGroup', {
+      vpc,
+      allowAllOutbound: true,
+      description: 'Cheap RTMP demo Traefik proxy access'
+    });
+    proxySecurityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(80), 'HTTP through Traefik');
+    proxySecurityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(1935), 'RTMP through Traefik');
+    proxySecurityGroup.addIngressRule(Peer.ipv4(config.adminCidr), Port.tcp(22), 'Optional SSH from admin CIDR');
+
     const securityGroup = new SecurityGroup(this, 'InstanceSecurityGroup', {
       vpc,
       allowAllOutbound: true,
       description: 'Cheap RTMP demo ECS instance access'
     });
-    securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(80), 'HTTP through nginx');
-    for (let node = 0; node < config.maxAppCount; node++) {
-      securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(1935 + node), `RTMP node ${node + 1}`);
-    }
+    securityGroup.addIngressRule(proxySecurityGroup, Port.tcp(8888), 'HTTP from Traefik proxy');
+    securityGroup.addIngressRule(proxySecurityGroup, Port.tcp(1935), 'RTMP from Traefik proxy');
     securityGroup.addIngressRule(Peer.ipv4(config.adminCidr), Port.tcp(22), 'Optional SSH from admin CIDR');
+    proxySecurityGroup.addIngressRule(securityGroup, Port.tcp(6379), 'Redis from ECS app instances');
 
     const cluster = new Cluster(this, 'Cluster', { vpc });
     const userData = UserData.forLinux();
@@ -59,9 +69,9 @@ export class CheapEcsEc2Stack extends Stack {
       role: instanceRole,
       securityGroup,
       userData,
-      minCapacity: 1,
-      maxCapacity: 1,
-      desiredCapacity: 1,
+      minCapacity: ecsInstanceCount,
+      maxCapacity: Math.max(config.maxAppCount, ecsInstanceCount),
+      desiredCapacity: ecsInstanceCount,
       vpcSubnets: { subnetType: SubnetType.PUBLIC }
     });
 
@@ -92,128 +102,185 @@ export class CheapEcsEc2Stack extends Stack {
 
     const secretParameter = StringParameter.fromStringParameterName(this, 'HmacSecretParameter', '/rtmp/demo/hmac-secret');
 
-    const redisTask = new Ec2TaskDefinition(this, 'RedisTask', {
+    const proxyRole = new Role(this, 'ProxyInstanceRole', {
+      assumedBy: new ServicePrincipal('ec2.amazonaws.com')
+    });
+    proxyRole.addToPolicy(new PolicyStatement({
+      actions: [
+        'autoscaling:DescribeAutoScalingGroups',
+        'ec2:DescribeInstances'
+      ],
+      resources: ['*']
+    }));
+
+    const proxyUserData = UserData.forLinux();
+    proxyUserData.addCommands(
+      'dnf install -y docker awscli jq',
+      'systemctl enable --now docker',
+      'mkdir -p /etc/traefik/dynamic',
+      'cat > /etc/traefik/traefik.yml <<\'EOF\'',
+      'entryPoints:',
+      '  web:',
+      '    address: ":80"',
+      '  rtmp:',
+      '    address: ":1935"',
+      'providers:',
+      '  file:',
+      '    directory: /etc/traefik/dynamic',
+      '    watch: true',
+      'log:',
+      '  level: INFO',
+      'EOF',
+      'docker run -d --name redis --restart unless-stopped -p 6379:6379 redis:7-alpine',
+      'docker run -d --name traefik --restart unless-stopped --network host -v /etc/traefik:/etc/traefik:ro traefik:v3.1',
+      'cat > /usr/local/bin/render-traefik-backends <<\'EOF\'',
+      '#!/bin/bash',
+      'set -euo pipefail',
+      `REGION="${this.region}"`,
+      `ASG_NAME="${autoScalingGroup.autoScalingGroupName}"`,
+      'TMP_FILE="$(mktemp)"',
+      'FINAL_FILE="/etc/traefik/dynamic/ecs.yml"',
+      'INSTANCE_IDS="$(aws autoscaling describe-auto-scaling-groups --region "$REGION" --auto-scaling-group-names "$ASG_NAME" --query \'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId\' --output text)"',
+      'PRIVATE_IPS=""',
+      'if [ -n "$INSTANCE_IDS" ]; then',
+      '  PRIVATE_IPS="$(aws ec2 describe-instances --region "$REGION" --instance-ids $INSTANCE_IDS --query \'Reservations[].Instances[?State.Name==`running`].PrivateIpAddress\' --output text)"',
+      'fi',
+      'cat > "$TMP_FILE" <<\'YAML\'',
+      'http:',
+      '  routers:',
+      '    app:',
+      '      entryPoints:',
+      '        - web',
+      '      rule: PathPrefix(`/`)',
+      '      service: app',
+      '  services:',
+      '    app:',
+      '      loadBalancer:',
+      '        servers:',
+      'YAML',
+      'if [ -z "$PRIVATE_IPS" ]; then',
+      '  echo "          - url: http://127.0.0.1:65535" >> "$TMP_FILE"',
+      'else',
+      '  for ip in $PRIVATE_IPS; do echo "          - url: http://$ip:8888" >> "$TMP_FILE"; done',
+      'fi',
+      'cat >> "$TMP_FILE" <<\'YAML\'',
+      'tcp:',
+      '  routers:',
+      '    rtmp:',
+      '      entryPoints:',
+      '        - rtmp',
+      '      rule: HostSNI(`*`)',
+      '      service: rtmp',
+      '  services:',
+      '    rtmp:',
+      '      loadBalancer:',
+      '        servers:',
+      'YAML',
+      'if [ -z "$PRIVATE_IPS" ]; then',
+      '  echo "          - address: 127.0.0.1:65535" >> "$TMP_FILE"',
+      'else',
+      '  for ip in $PRIVATE_IPS; do echo "          - address: $ip:1935" >> "$TMP_FILE"; done',
+      'fi',
+      'if ! cmp -s "$TMP_FILE" "$FINAL_FILE"; then mv "$TMP_FILE" "$FINAL_FILE"; else rm "$TMP_FILE"; fi',
+      'EOF',
+      'chmod +x /usr/local/bin/render-traefik-backends',
+      'cat > /etc/systemd/system/traefik-backends.service <<\'EOF\'',
+      '[Unit]',
+      'Description=Render Traefik ECS backend config',
+      '',
+      '[Service]',
+      'Type=oneshot',
+      'ExecStart=/usr/local/bin/render-traefik-backends',
+      'EOF',
+      'cat > /etc/systemd/system/traefik-backends.timer <<\'EOF\'',
+      '[Unit]',
+      'Description=Refresh Traefik ECS backend config',
+      '',
+      '[Timer]',
+      'OnBootSec=20s',
+      'OnUnitActiveSec=15s',
+      'Unit=traefik-backends.service',
+      '',
+      '[Install]',
+      'WantedBy=timers.target',
+      'EOF',
+      'systemctl daemon-reload',
+      'systemctl enable --now traefik-backends.timer'
+    );
+
+    const proxyInstance = new Instance(this, 'ProxyInstance', {
+      vpc,
+      instanceType: new InstanceType('t4g.micro'),
+      machineImage: MachineImage.latestAmazonLinux2023({ cpuType: AmazonLinuxCpuType.ARM_64 }),
+      role: proxyRole,
+      securityGroup: proxySecurityGroup,
+      userData: proxyUserData,
+      vpcSubnets: { subnetType: SubnetType.PUBLIC }
+    });
+
+    const proxyElasticIp = new CfnEIP(this, 'ProxyEip', { domain: 'vpc' });
+    new CfnEIPAssociation(this, 'ProxyElasticIpAssociation', {
+      allocationId: proxyElasticIp.attrAllocationId,
+      instanceId: proxyInstance.instanceId
+    });
+
+    const taskDefinition = new Ec2TaskDefinition(this, 'AppTask', {
       networkMode: NetworkMode.HOST,
       executionRole,
-      taskRole
+      taskRole,
+      volumes: [{ name: 'hls' }]
     });
-    redisTask.addContainer('redis', {
-      image: ContainerImage.fromRegistry('redis:7-alpine'),
-      memoryReservationMiB: 128,
-      healthCheck: {
-        command: ['CMD-SHELL', 'redis-cli ping | grep PONG'],
-        interval: cdk.Duration.seconds(5),
-        timeout: cdk.Duration.seconds(3),
-        retries: 5,
-        startPeriod: cdk.Duration.seconds(5)
+    const appContainer = taskDefinition.addContainer('rtmp-app', {
+      image: ContainerImage.fromRegistry(config.appImage),
+      memoryReservationMiB: 384,
+      secrets: {
+        RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter)
       },
-      logging: new AwsLogDriver({ streamPrefix: 'redis', logGroup })
-    }).addPortMappings({ containerPort: 6379, hostPort: 6379 });
-    const redisService = new Ec2Service(this, 'RedisService', {
+      environment: {
+        MICRONAUT_SERVER_PORT: '8888',
+        REDIS_URI: `redis://${proxyInstance.instancePrivateIp}:6379`,
+        RTMP_SERVER_ID: 'auto',
+        RTMP_PORT: '1935',
+        RTMP_ENDPOINT: `rtmp://${config.rtmpHost}:1935/live`,
+        RTMP_PLAYBACK_BASE_URL: `https://${storage.distribution.distributionDomainName}`,
+        RTMP_HLS_ROOT: '/app/hls'
+      },
+      logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
+    });
+    appContainer.addPortMappings(
+      { containerPort: 8888, hostPort: 8888 },
+      { containerPort: 1935, hostPort: 1935 }
+    );
+    appContainer.addMountPoints({ containerPath: '/app/hls', sourceVolume: 'hls', readOnly: false });
+
+    const uploader = taskDefinition.addContainer('hls-uploader', {
+      image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:latest'),
+      essential: false,
+      memoryReservationMiB: 96,
+      entryPoint: ['sh', '-c'],
+      command: [`while true; do aws s3 sync /app/hls s3://${storage.bucket.bucketName}/hls/ --cache-control 'max-age=2'; sleep 2; done`],
+      logging: new AwsLogDriver({ streamPrefix: 'uploader', logGroup })
+    });
+    uploader.addMountPoints({ containerPath: '/app/hls', sourceVolume: 'hls', readOnly: true });
+
+    new Ec2Service(this, 'AppService', {
       cluster,
-      taskDefinition: redisTask,
-      desiredCount: 1,
+      taskDefinition,
+      desiredCount: appTaskCount,
       circuitBreaker: { rollback: false },
       minHealthyPercent: 0,
       maxHealthyPercent: 100,
+      placementConstraints: [PlacementConstraint.distinctInstances()],
       capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
     });
 
-    const nginxConfig = [
-      'events {}',
-      'http {',
-      '  upstream rtmp_app {',
-      ...Array.from({ length: config.desiredAppCount }, (_, i) => `    server 127.0.0.1:${8888 + i};`),
-      '  }',
-      '  server {',
-      '    listen 80;',
-      '    location / { proxy_pass http://rtmp_app; proxy_set_header Host $host; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; }',
-      '  }',
-      '}'
-    ].join('\n');
-
-    const nginxTask = new Ec2TaskDefinition(this, 'NginxTask', {
-      networkMode: NetworkMode.HOST,
-      executionRole,
-      taskRole
-    });
-    nginxTask.addContainer('nginx', {
-      image: ContainerImage.fromRegistry('nginx:alpine'),
-      memoryReservationMiB: 64,
-      command: ['sh', '-c', `cat > /etc/nginx/nginx.conf <<'EOF'\n${nginxConfig}\nEOF\nnginx -g 'daemon off;'`],
-      logging: new AwsLogDriver({ streamPrefix: 'nginx', logGroup })
-    }).addPortMappings({ containerPort: 80, hostPort: 80 });
-    new Ec2Service(this, 'NginxService', {
-      cluster,
-      taskDefinition: nginxTask,
-      desiredCount: 1,
-      circuitBreaker: { rollback: false },
-      minHealthyPercent: 0,
-      maxHealthyPercent: 100,
-      capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
-    });
-
-    for (let node = 0; node < config.desiredAppCount; node++) {
-      const httpPort = 8888 + node;
-      const rtmpPort = 1935 + node;
-      const hlsVolumeName = `hls-${node + 1}`;
-      const taskDefinition = new Ec2TaskDefinition(this, `AppTask${node + 1}`, {
-        networkMode: NetworkMode.HOST,
-        executionRole,
-        taskRole,
-        volumes: [{ name: hlsVolumeName }]
-      });
-      const appContainer = taskDefinition.addContainer('rtmp-app', {
-        image: ContainerImage.fromRegistry(config.appImage),
-        memoryReservationMiB: 384,
-        secrets: {
-          RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter)
-        },
-        environment: {
-          MICRONAUT_SERVER_PORT: String(httpPort),
-          REDIS_URI: 'redis://127.0.0.1:6379',
-          RTMP_SERVER_ID: `cheap-node-${node + 1}`,
-          RTMP_PORT: String(rtmpPort),
-          RTMP_ENDPOINT: `rtmp://${config.rtmpHost}:${rtmpPort}/live`,
-          RTMP_PLAYBACK_BASE_URL: `https://${storage.distribution.distributionDomainName}`,
-          RTMP_HLS_ROOT: '/app/hls'
-        },
-        logging: new AwsLogDriver({ streamPrefix: `app-${node + 1}`, logGroup })
-      });
-      appContainer.addPortMappings(
-        { containerPort: httpPort, hostPort: httpPort },
-        { containerPort: rtmpPort, hostPort: rtmpPort }
-      );
-      appContainer.addMountPoints({ containerPath: '/app/hls', sourceVolume: hlsVolumeName, readOnly: false });
-
-      const uploader = taskDefinition.addContainer('hls-uploader', {
-        image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:latest'),
-        essential: false,
-        memoryReservationMiB: 96,
-        entryPoint: ['sh', '-c'],
-        command: [`while true; do aws s3 sync /app/hls s3://${storage.bucket.bucketName}/hls/ --cache-control 'max-age=2'; sleep 2; done`],
-        logging: new AwsLogDriver({ streamPrefix: `uploader-${node + 1}`, logGroup })
-      });
-      uploader.addMountPoints({ containerPath: '/app/hls', sourceVolume: hlsVolumeName, readOnly: true });
-
-      const appService = new Ec2Service(this, `AppService${node + 1}`, {
-        cluster,
-        taskDefinition,
-        desiredCount: 1,
-        circuitBreaker: { rollback: false },
-        minHealthyPercent: 0,
-        maxHealthyPercent: 100,
-        capacityProviderStrategies: [{ capacityProvider: capacityProvider.capacityProviderName, weight: 1 }]
-      });
-      appService.node.addDependency(redisService);
-    }
-
-    new cdk.CfnOutput(this, 'HttpUrl', { value: 'http://<instance-public-dns>/' });
+    new cdk.CfnOutput(this, 'HttpUrl', { value: `http://${config.rtmpHost}/` });
+    new cdk.CfnOutput(this, 'ProxyElasticIp', { value: proxyElasticIp.ref });
+    new cdk.CfnOutput(this, 'ProxyInstanceId', { value: proxyInstance.instanceId });
     new cdk.CfnOutput(this, 'AutoScalingGroupName', { value: autoScalingGroup.autoScalingGroupName });
     new cdk.CfnOutput(this, 'PlaybackBaseUrl', { value: `https://${storage.distribution.distributionDomainName}` });
     new cdk.CfnOutput(this, 'HlsBucketName', { value: storage.bucket.bucketName });
-    new cdk.CfnOutput(this, 'RtmpHostConfiguration', {
-      value: `Redeploy with -c rtmpHost=<instance-public-dns-or-ip>; current value is ${config.rtmpHost}`
-    });
+    new cdk.CfnOutput(this, 'RtmpUrl', { value: `rtmp://${config.rtmpHost}:1935/live` });
+    new cdk.CfnOutput(this, 'DomainConfiguration', { value: `Point ${config.rtmpHost} to Elastic IP ${proxyElasticIp.ref}` });
   }
 }

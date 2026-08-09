@@ -3,6 +3,7 @@ package com.nhochamvui.rtmp.core;
 import jakarta.inject.Singleton;
 import com.nhochamvui.rtmp.session.NodeRegistry;
 import com.nhochamvui.rtmp.session.SafePlaybackPath;
+import com.nhochamvui.rtmp.session.ServerIdentity;
 import com.nhochamvui.rtmp.session.StreamSessionService;
 import io.micronaut.context.annotation.Value;
 import io.micronaut.scheduling.annotation.Scheduled;
@@ -31,15 +32,15 @@ public class Server {
             StreamSessionService streamSessionService,
             SafePlaybackPath safePlaybackPath,
             NodeRegistry nodeRegistry,
-            @Value("${rtmp.server-id:local-node}") String serverId,
+            ServerIdentity serverIdentity,
             @Value("${rtmp.port:1935}") int port
     ) {
         this.streamSessionService = streamSessionService;
         this.safePlaybackPath = safePlaybackPath;
         this.nodeRegistry = nodeRegistry;
-        this.serverId = serverId;
+        this.serverId = serverIdentity.serverId();
         this.port = port;
-        log.info("RTMP Server initialized | serverId={} | port={}", serverId, port);
+        log.info("RTMP Server initialized | serverId={} | port={}", this.serverId, port);
     }
 
     public void listen() {

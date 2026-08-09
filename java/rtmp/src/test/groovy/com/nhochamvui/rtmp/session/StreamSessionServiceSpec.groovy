@@ -96,6 +96,45 @@ class StreamSessionServiceSpec extends Specification {
         repo.sessions[lookupKey].publisherIp() == "198.51.100.20"
     }
 
+    def "pending session can be claimed by the node reached through proxy routing"() {
+        given:
+        def repo = new MemoryRepo()
+        def hasher = new StreamKeyHasher("01234567890123456789012345678901")
+        def lookupKey = hasher.lookupKey("private-publish-key")
+        repo.sessions[lookupKey] = new StreamSession(
+                lookupKey,
+                "public-playback-id",
+                "node-selected-by-api",
+                StreamSessionStatus.PENDING,
+                "203.0.113.10",
+                null,
+                null,
+                "browser",
+                null,
+                1,
+                0,
+                0
+        )
+        def service = new StreamSessionService(
+                new FixedGenerator("unused", "unused"),
+                hasher,
+                repo,
+                new FixedNodeRegistry(new IngestNode("node-selected-by-api", "rtmp://rtmp.example.test/live", NodeStatus.ACTIVE, 0, 0, 1)),
+                "https://example.test/stream",
+                5,
+                1
+        )
+
+        when:
+        def validation = service.validatePublish("private-publish-key", "node-reached-by-proxy", "conn-1", "198.51.100.20")
+
+        then:
+        validation.present
+        repo.sessions[lookupKey].assignedServerId() == "node-reached-by-proxy"
+        repo.sessions[lookupKey].connectionId() == "conn-1"
+    }
+
+
     def "duplicate publish is rejected without evicting active publisher"() {
         given:
         def repo = new MemoryRepo()
@@ -240,7 +279,10 @@ class StreamSessionServiceSpec extends Specification {
         @Override
         Optional<StreamSession> validatePublish(String lookupKey, String serverId, String connectionId, String publisherIp, int ttlSeconds) {
             def session = sessions[lookupKey]
-            if (!session || session.assignedServerId() != serverId) {
+            if (!session) {
+                return Optional.empty()
+            }
+            if (session.status() == StreamSessionStatus.ACTIVE && session.assignedServerId() != serverId) {
                 return Optional.empty()
             }
             if (session.status() == StreamSessionStatus.ACTIVE && session.connectionId() && session.connectionId() != connectionId) {
@@ -249,7 +291,7 @@ class StreamSessionServiceSpec extends Specification {
             def active = new StreamSession(
                     lookupKey,
                     session.playbackId(),
-                    session.assignedServerId(),
+                    serverId,
                     StreamSessionStatus.ACTIVE,
                     session.requestedIp(),
                     publisherIp,

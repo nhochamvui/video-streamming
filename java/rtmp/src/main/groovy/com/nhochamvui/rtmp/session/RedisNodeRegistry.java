@@ -22,12 +22,12 @@ public class RedisNodeRegistry implements NodeRegistry {
 
     public RedisNodeRegistry(
             RedisProvider redisProvider,
-            @Value("${rtmp.server-id:local-node}") String serverId,
+            ServerIdentity serverIdentity,
             @Value("${rtmp.endpoint}") String endpoint,
             @Value("${rtmp.node-status:ACTIVE}") String nodeStatus
     ) {
         this.redisProvider = redisProvider;
-        this.serverId = serverId;
+        this.serverId = serverIdentity.serverId();
         this.endpoint = endpoint;
         this.nodeStatus = nodeStatus;
     }

@@ -23,15 +23,16 @@ public class LettuceStreamSessionRepository implements StreamSessionRepository {
               return {}
             end
             local assignedServerId = redis.call('HGET', key, 'assignedServerId')
-            if assignedServerId ~= serverId then
+            local status = redis.call('HGET', key, 'status')
+            if status == 'ACTIVE' and assignedServerId ~= serverId then
               return {}
             end
-            local status = redis.call('HGET', key, 'status')
             local ownerConnectionId = redis.call('HGET', key, 'connectionId')
             if status == 'ACTIVE' and ownerConnectionId and ownerConnectionId ~= '' and ownerConnectionId ~= connectionId then
               return {}
             end
             redis.call('HSET', key,
+              'assignedServerId', serverId,
               'status', 'ACTIVE',
               'publisherIp', publisherIp,
               'serverId', serverId,
