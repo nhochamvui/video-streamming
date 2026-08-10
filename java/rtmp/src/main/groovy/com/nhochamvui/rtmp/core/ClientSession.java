@@ -791,6 +791,7 @@ public class ClientSession {
                 "-hls_time", "1",
                 "-hls_segment_type", "fmp4",
                 "-hls_list_size", "10",
+                "-hls_delete_threshold", "1",
                 "-hls_flags", "split_by_time+delete_segments",
                 "-hls_segment_filename", hlsBaseDir + "/hd/output_%d.m4s",
                 hlsBaseDir + "/hd/output.m3u8"
@@ -803,6 +804,7 @@ public class ClientSession {
                 // "-hls_time", "1",
                 // "-hls_segment_type", "fmp4",
                 // "-hls_list_size", "10",
+                // "-hls_delete_threshold", "1",
                 // "-hls_flags", "split_by_time+delete_segments",
                 // "-hls_segment_filename", hlsBaseDir + "/ld/output_%d.m4s",
                 // hlsBaseDir + "/ld/output.m3u8"

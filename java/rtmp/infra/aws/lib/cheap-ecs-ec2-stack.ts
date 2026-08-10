@@ -258,7 +258,7 @@ export class CheapEcsEc2Stack extends Stack {
       essential: false,
       memoryReservationMiB: 96,
       entryPoint: ['sh', '-c'],
-      command: [`while true; do aws s3 sync /app/hls s3://${storage.bucket.bucketName}/hls/ --cache-control 'max-age=2'; sleep 2; done`],
+      command: [hlsUploadCommand(storage.bucket.bucketName)],
       logging: new AwsLogDriver({ streamPrefix: 'uploader', logGroup })
     });
     uploader.addMountPoints({ containerPath: '/app/hls', sourceVolume: 'hls', readOnly: true });
@@ -288,4 +288,14 @@ export class CheapEcsEc2Stack extends Stack {
 function ecsAmiHardwareType(instanceTypeName: string): AmiHardwareType {
   const family = instanceTypeName.split('.')[0].toLowerCase();
   return family === 'a1' || family.endsWith('g') ? AmiHardwareType.ARM : AmiHardwareType.STANDARD;
+}
+
+function hlsUploadCommand(bucketName: string): string {
+  return [
+    'while true; do',
+    `  find /app/hls -mindepth 1 -maxdepth 1 -type d -exec sh -c 'for stream_dir do stream="\${stream_dir#/app/hls/}"; aws s3 sync "$stream_dir/" "s3://${bucketName}/hls/$stream/" --exclude "*.m3u8" --cache-control "public,max-age=30,immutable" --delete; done' sh {} +;`,
+    `  find /app/hls -name '*.m3u8' -type f -exec sh -c 'for file do key="\${file#/app/hls/}"; aws s3 cp "$file" "s3://${bucketName}/hls/$key" --cache-control "no-cache,no-store,must-revalidate" --content-type "application/vnd.apple.mpegurl"; done' sh {} +;`,
+    '  sleep 1;',
+    'done'
+  ].join(' ');
 }
