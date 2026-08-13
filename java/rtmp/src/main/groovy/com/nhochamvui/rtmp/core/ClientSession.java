@@ -783,31 +783,11 @@ public class ClientSession {
         new File(hlsBaseDir + "/hd").mkdirs();
         writeMasterPlaylist();
 
-        List<String> command = List.of("ffmpeg",
-                "-fflags", "+genpts",
-                "-f", "flv", "-i", "pipe:0",
-                "-map", "0:v", "-map", "0:a", "-c", "copy",
-                "-f", "hls",
-                "-hls_time", "1",
-                "-hls_segment_type", "fmp4",
-                "-hls_list_size", "10",
-                "-hls_delete_threshold", "1",
-                "-hls_flags", "split_by_time+delete_segments",
-                "-hls_segment_filename", hlsBaseDir + "/hd/output_%d.m4s",
-                hlsBaseDir + "/hd/output.m3u8"
-                // LD transcode commented out to reduce CPU overhead:
-                // , "-map", "0:v", "-map", "0:a",
-                // "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "800k",
-                // "-s", "854x480", "-g", "30",
-                // "-c:a", "aac", "-b:a", "64k",
-                // "-f", "hls",
-                // "-hls_time", "1",
-                // "-hls_segment_type", "fmp4",
-                // "-hls_list_size", "10",
-                // "-hls_delete_threshold", "1",
-                // "-hls_flags", "split_by_time+delete_segments",
-                // "-hls_segment_filename", hlsBaseDir + "/ld/output_%d.m4s",
-                // hlsBaseDir + "/ld/output.m3u8"
+        List<String> command = List.of("hls-segmenter",
+                "--out-dir", hlsBaseDir + "/hd",
+                "--hls-time", "1",
+                "--hls-list-size", "10",
+                "--hls-delete-threshold", "1"
         );
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
@@ -817,8 +797,8 @@ public class ClientSession {
         Thread.ofVirtual().start(() -> {
             applyMdc();
             try {
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(ffmpegProcess.getInputStream()));
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(ffmpegProcess.getInputStream()));
                 String line;
                 while ((line = reader.readLine()) != null) {
                     ffmpegLog.info("[{}] {}", connectionId, line);
