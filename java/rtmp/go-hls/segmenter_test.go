@@ -203,6 +203,53 @@ func TestS3MirrorPrunesExpiredSegments(t *testing.T) {
 	}
 }
 
+// TestDeleteFiresOncePerExpiredSegment guards against the delete-flood bug:
+// a full re-scan of written[] on every emit re-fired S3 Delete for already
+// pruned segments, flooding the upload queue and dropping playlist PUTs. Each
+// expired segment must be deleted exactly once.
+func TestDeleteFiresOncePerExpiredSegment(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSegmenter(dir, 1000, 10, 1)
+	up := newFakeUploader()
+	s.SetUploader(up)
+
+	s.Process(tagTypeVideo, 0, testAVCConfig())
+	s.Process(tagTypeAudio, 0, testAACConfig())
+
+	// ~45 segments: far beyond the 10-segment local window and 15-segment S3
+	// window, so deletes must actually fire for expired segments.
+	last := feedVideo(s, 0, 45*25, 25, 25)
+	feedAudio(s, 0, last)
+	if err := s.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(s.written) < 30 {
+		t.Fatalf("test requires 30+ segments, got %d", len(s.written))
+	}
+
+	s3Floor := s.written[len(s.written)-1].num - 15
+	expect := 0
+	for _, e := range s.written {
+		if e.num < s3Floor {
+			expect++
+		}
+	}
+	if expect < 10 {
+		t.Fatalf("test too weak: expected at least 10 S3 deletes, got %d", expect)
+	}
+	if len(up.dels) != expect {
+		t.Fatalf("expected %d S3 deletes (each expired segment once), got %d", expect, len(up.dels))
+	}
+
+	seen := map[string]bool{}
+	for _, key := range up.dels {
+		if seen[key] {
+			t.Errorf("duplicate S3 delete for %s", key)
+		}
+		seen[key] = true
+	}
+}
+
 func TestBasicSegmentation(t *testing.T) {
 
 	s, dir := newTestSegmenter(t, 1000)

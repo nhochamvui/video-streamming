@@ -60,6 +60,9 @@ type Segmenter struct {
 	curA           []*sample
 	written        []segment
 
+	pruneCursor    int // index into written[] up to which local files were pruned
+	s3DeleteCursor int // index into written[] up to which S3 objects were deleted
+
 	uploader        Uploader
 	lastMasterMtime int64
 
@@ -468,20 +471,25 @@ func (s *Segmenter) emitPlaylist() {
 		sb.WriteString(fmt.Sprintf("output_%d.m4s\n", e.num))
 	}
 
-	// delete segments that fell out of the window beyond the threshold
+	// delete segments that fell out of the window beyond the threshold. Each
+	// segment is pruned exactly once: the cursors track how far into written[]
+	// we have already deleted, so a full re-scan does not re-fire deletes on
+	// every rotation (which flooded the upload queue and dropped playlist PUTs).
 	if len(s.written) > s.listSize {
-		firstInWindow := s.written[len(s.written)-s.listSize].num
-		oldestKeep := firstInWindow - s.deleteThreshold
+		oldestKeep := s.written[len(s.written)-s.listSize].num - s.deleteThreshold
 		// keep a wider window on S3 (15 segments) so viewers behind by a few
 		// seconds on stale playlists still find their segments
 		s3Floor := s.written[len(s.written)-1].num - 15
-		for _, e := range s.written[:len(s.written)-s.listSize] {
-			if e.num < oldestKeep {
-				_ = os.Remove(filepath.Join(s.outDir, fmt.Sprintf("output_%d.m4s", e.num)))
-				if s.uploader != nil && e.num < s3Floor {
-					s.uploader.Delete(s.s3Prefix() + "/hd/" + fmt.Sprintf("output_%d.m4s", e.num))
-				}
+		end := len(s.written) - s.listSize
+		for s.pruneCursor < end && s.written[s.pruneCursor].num < oldestKeep {
+			_ = os.Remove(filepath.Join(s.outDir, fmt.Sprintf("output_%d.m4s", s.written[s.pruneCursor].num)))
+			s.pruneCursor++
+		}
+		for s.s3DeleteCursor < end && s.written[s.s3DeleteCursor].num < s3Floor {
+			if s.uploader != nil {
+				s.uploader.Delete(s.s3Prefix() + "/hd/" + fmt.Sprintf("output_%d.m4s", s.written[s.s3DeleteCursor].num))
 			}
+			s.s3DeleteCursor++
 		}
 	}
 

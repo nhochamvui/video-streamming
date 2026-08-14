@@ -98,24 +98,9 @@ func (u *s3Uploader) PutSegment(key, localPath string) {
 }
 
 func (u *s3Uploader) PutPlaylist(key, localPath string) {
-	// Playlists are rewritten every second; dropping a stale one is safe because
-	// the next emit supersedes it. Keeps a stalled S3 from ever blocking ingest.
-	select {
-	case u.queue <- uploadTask{
-		kind:         putPlaylist,
-		key:          key,
-		localPath:    localPath,
-		contentType:  "application/vnd.apple.mpegurl",
-		cacheControl: "no-cache,no-store,must-revalidate",
-	}:
-	default:
-	}
-}
-
-// PutPlaylistReliable enqueues a playlist upload that must not be dropped.
-// Used for one-shot files like master.m3u8 where a dropped task would not be
-// superseded by a later emit.
-func (u *s3Uploader) PutPlaylistReliable(key, localPath string) {
+	// Playlists are rewritten every second and MUST land: a dropped (stale)
+	// playlist stalls viewers until the cache TTL passes. The worker drains the
+	// bounded queue quickly, so blocking enqueue never stalls ingest in practice.
 	u.enqueue(uploadTask{
 		kind:         putPlaylist,
 		key:          key,
@@ -123,6 +108,13 @@ func (u *s3Uploader) PutPlaylistReliable(key, localPath string) {
 		contentType:  "application/vnd.apple.mpegurl",
 		cacheControl: "no-cache,no-store,must-revalidate",
 	})
+}
+
+// PutPlaylistReliable is kept for one-shot files like master.m3u8 where a
+// dropped task would not be superseded by a later emit. PutPlaylist is now
+// reliable (blocking) as well, so this is an alias.
+func (u *s3Uploader) PutPlaylistReliable(key, localPath string) {
+	u.PutPlaylist(key, localPath)
 }
 
 func (u *s3Uploader) Delete(key string) {
