@@ -234,3 +234,29 @@ func TestVideoOnly(t *testing.T) {
 		t.Fatalf("init.mp4 missing: %v", err)
 	}
 }
+
+func TestSplitByTime(t *testing.T) {
+	s, _ := newTestSegmenter(t, 1000)
+	s.Process(tagTypeVideo, 0, testAVCConfig())
+	s.Process(tagTypeAudio, 0, testAACConfig())
+
+	// 3 seconds at 30fps with a 2s GOP (keyframe every 60 frames).
+	// Split-by-time should yield ~3 one-second segments, not 2 keyframe-aligned segments.
+	last := feedVideo(s, 0, 90, 60, 30)
+	feedAudio(s, 0, last)
+	if err := s.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	if len(s.written) != 3 {
+		t.Fatalf("expected 3 segments (split by time), got %d: %+v", len(s.written), s.written)
+	}
+	for i := 0; i < 2; i++ {
+		if seg := s.written[i]; seg.durMS < 900 || seg.durMS > 1100 {
+			t.Errorf("segment %d durMS=%d, want ~1000", i, seg.durMS)
+		}
+	}
+	if s.written[2].durMS >= 1000 {
+		t.Errorf("last segment durMS=%d, want <1000 (tail)", s.written[2].durMS)
+	}
+}

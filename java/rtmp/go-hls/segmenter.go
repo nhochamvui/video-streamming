@@ -224,7 +224,7 @@ func (s *Segmenter) addVideoSample(dts int64, cts int32, body []byte) error {
 	newPending := &sample{dts: dts, fmp4: &fmp4.Sample{Payload: body, PTSOffset: cts, IsNonSyncSample: !key}, key: key}
 	s.pendingVideo = newPending
 
-	if key && dts-segStart >= s.targetDurMS {
+	if dts-segStart >= s.targetDurMS {
 		if err := s.rotate(); err != nil {
 			return err
 		}
@@ -242,7 +242,7 @@ func (s *Segmenter) segStartDTS() int64 {
 	return 0
 }
 
-// rotate closes the current segment and starts a new one. The held pending keyframe
+// rotate closes the current segment and starts a new one. The held pending sample
 // becomes the first sample of the next segment.
 func (s *Segmenter) rotate() error {
 	seg := s.buildSegment()
@@ -266,7 +266,7 @@ func (s *Segmenter) buildSegment() *segment {
 		return nil
 	}
 
-	// segment duration = keyframeDTS - segmentStart (the held pending sample is the keyframe)
+	// segment duration = next sample DTS - segmentStart (segments are split by time)
 	end := start
 	if s.pendingVideo != nil {
 		end = s.pendingVideo.dts
