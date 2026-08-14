@@ -100,6 +100,14 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Cache CDK dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.INFRA_DIR }}/node_modules
+          key: cdk-${{ runner.os }}-${{ hashFiles(format('{0}/package.json', env.INFRA_DIR)) }}
+          restore-keys: |
+            cdk-${{ runner.os }}-
+
       - name: Install CDK dependencies
         working-directory: ${{ env.INFRA_DIR }}
         run: npm install
@@ -123,8 +131,19 @@ jobs:
         if: ${{ inputs.action == 'deploy' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push app image
+      - name: Check if app image already exists
         if: ${{ inputs.action == 'deploy' }}
+        id: image-exists
+        run: |
+          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          if docker manifest inspect "$REGISTRY/${ECR_REPOSITORY}:${GITHUB_SHA}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push app image
+        if: ${{ inputs.action == 'deploy' && steps.image-exists.outputs.exists == 'false' }}
         id: image
         uses: docker/build-push-action@v6
         with:
@@ -144,6 +163,17 @@ jobs:
             echo "uri=${{ steps.ecr-login.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           else
             echo "uri=public.ecr.aws/docker/library/eclipse-temurin:21-jre" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve stack names
+        id: stacks
+        run: |
+          if [ "${{ inputs.deploy_mode }}" = "managed" ]; then
+            echo "infra=RtmpManagedDemoInfraStack" >> "$GITHUB_OUTPUT"
+            echo "app=RtmpManagedDemoAppStack" >> "$GITHUB_OUTPUT"
+          else
+            echo "infra=RtmpCheapDemoInfraStack" >> "$GITHUB_OUTPUT"
+            echo "app=RtmpCheapDemoAppStack" >> "$GITHUB_OUTPUT"
           fi
 
       - name: CDK synth
@@ -167,6 +197,8 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: |
           npx cdk deploy --require-approval never \
+            "${{ steps.stacks.outputs.infra }}" \
+            "${{ steps.stacks.outputs.app }}" \
             -c deployMode="${{ inputs.deploy_mode }}" \
             -c appImage="${{ steps.app-image.outputs.uri }}" \
             -c desiredAppCount="${{ inputs.desired_app_count }}" \
@@ -182,128 +214,132 @@ jobs:
         if: ${{ inputs.action == 'destroy' }}
         run: |
           if [ "${{ inputs.deploy_mode }}" = "managed" ]; then
-            STACK_NAME="RtmpManagedDemoStack"
+            APP_STACK="RtmpManagedDemoAppStack"
+            INFRA_STACK="RtmpManagedDemoInfraStack"
           else
-            STACK_NAME="RtmpCheapDemoStack"
+            APP_STACK="RtmpCheapDemoAppStack"
+            INFRA_STACK="RtmpCheapDemoInfraStack"
           fi
 
-          if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
-            echo "Stack $STACK_NAME does not exist; skipping ECS service drain."
-            exit 0
-          fi
-
-          CLUSTER=$(
-            aws cloudformation describe-stack-resources \
-              --stack-name "$STACK_NAME" \
-              --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId | [0]" \
-              --output text
-          )
-          if [ -z "$CLUSTER" ] || [ "$CLUSTER" = "None" ]; then
-            echo "No ECS cluster found in $STACK_NAME; skipping ECS service drain."
-            exit 0
-          fi
-
-          mapfile -t SERVICES < <(
-            aws cloudformation describe-stack-resources \
-              --stack-name "$STACK_NAME" \
-              --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" \
-              --output text | tr '\t' '\n'
-          )
-
-          ACTIVE_SERVICES=()
-          for SERVICE in "${SERVICES[@]}"; do
-            if [ -z "$SERVICE" ] || [ "$SERVICE" = "None" ]; then
+          for STACK_NAME in "$APP_STACK" "$INFRA_STACK"; do
+            if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+              echo "Stack $STACK_NAME does not exist; skipping ECS service drain."
               continue
             fi
-            echo "Scaling ECS service $SERVICE to 0."
-            if aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 0 >/dev/null; then
-              ACTIVE_SERVICES+=("$SERVICE")
-            else
-              echo "Could not scale $SERVICE; it may already be deleting."
-            fi
-          done
 
-          if [ "${#ACTIVE_SERVICES[@]}" -gt 0 ]; then
-            aws ecs wait services-stable --cluster "$CLUSTER" --services "${ACTIVE_SERVICES[@]}"
-          fi
-
-          mapfile -t TASKS < <(
-            {
-              aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING --query "taskArns" --output text
-              aws ecs list-tasks --cluster "$CLUSTER" --desired-status PENDING --query "taskArns" --output text
-            } | tr '\t' '\n'
-          )
-
-          ACTIVE_TASKS=()
-          for TASK in "${TASKS[@]}"; do
-            if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then
+            CLUSTER=$(
+              aws cloudformation describe-stack-resources \
+                --stack-name "$STACK_NAME" \
+                --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId | [0]" \
+                --output text
+            )
+            if [ -z "$CLUSTER" ] || [ "$CLUSTER" = "None" ]; then
+              echo "No ECS cluster found in $STACK_NAME; skipping ECS service drain."
               continue
             fi
-            echo "Stopping ECS task $TASK."
-            if aws ecs stop-task --cluster "$CLUSTER" --task "$TASK" --reason "GitHub Actions destroy cleanup" >/dev/null; then
-              ACTIVE_TASKS+=("$TASK")
-            else
-              echo "Could not stop $TASK; it may already be stopping."
-            fi
-          done
 
-          if [ "${#ACTIVE_TASKS[@]}" -gt 0 ]; then
-            aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "${ACTIVE_TASKS[@]}"
-          fi
-
-          DELETED_SERVICES=()
-          for SERVICE in "${ACTIVE_SERVICES[@]}"; do
-            echo "Deleting ECS service $SERVICE before stack destroy."
-            if aws ecs delete-service --cluster "$CLUSTER" --service "$SERVICE" --force >/dev/null; then
-              DELETED_SERVICES+=("$SERVICE")
-            else
-              echo "Could not delete $SERVICE; it may already be deleting."
-            fi
-          done
-
-          if [ "${#DELETED_SERVICES[@]}" -gt 0 ]; then
-            aws ecs wait services-inactive --cluster "$CLUSTER" --services "${DELETED_SERVICES[@]}"
-          fi
-
-          echo "Detaching ECS cluster capacity providers before stack destroy."
-          aws ecs put-cluster-capacity-providers \
-            --cli-input-json "{\"cluster\":\"$CLUSTER\",\"capacityProviders\":[],\"defaultCapacityProviderStrategy\":[]}" \
-            >/dev/null || echo "Could not detach capacity providers; they may already be detached or the cluster may be deleting."
-
-          mapfile -t AUTO_SCALING_GROUPS < <(
-            aws cloudformation describe-stack-resources \
-              --stack-name "$STACK_NAME" \
-              --query "StackResources[?ResourceType=='AWS::AutoScaling::AutoScalingGroup'].PhysicalResourceId" \
-              --output text | tr '\t' '\n'
-          )
-
-          for AUTO_SCALING_GROUP in "${AUTO_SCALING_GROUPS[@]}"; do
-            if [ -z "$AUTO_SCALING_GROUP" ] || [ "$AUTO_SCALING_GROUP" = "None" ]; then
-              continue
-            fi
-            echo "Scaling Auto Scaling group $AUTO_SCALING_GROUP to 0."
-            aws autoscaling update-auto-scaling-group \
-              --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
-              --min-size 0 \
-              --desired-capacity 0
-
-            mapfile -t INSTANCE_IDS < <(
-              aws autoscaling describe-auto-scaling-groups \
-                --auto-scaling-group-names "$AUTO_SCALING_GROUP" \
-                --query "AutoScalingGroups[0].Instances[].InstanceId" \
+            mapfile -t SERVICES < <(
+              aws cloudformation describe-stack-resources \
+                --stack-name "$STACK_NAME" \
+                --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" \
                 --output text | tr '\t' '\n'
             )
 
-            ACTIVE_INSTANCE_IDS=()
-            for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
-              if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
-                ACTIVE_INSTANCE_IDS+=("$INSTANCE_ID")
+            ACTIVE_SERVICES=()
+            for SERVICE in "${SERVICES[@]}"; do
+              if [ -z "$SERVICE" ] || [ "$SERVICE" = "None" ]; then
+                continue
+              fi
+              echo "Scaling ECS service $SERVICE to 0."
+              if aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 0 >/dev/null; then
+                ACTIVE_SERVICES+=("$SERVICE")
+              else
+                echo "Could not scale $SERVICE; it may already be deleting."
               fi
             done
 
-            if [ "${#ACTIVE_INSTANCE_IDS[@]}" -gt 0 ]; then
-              aws ec2 wait instance-terminated --instance-ids "${ACTIVE_INSTANCE_IDS[@]}"
+            if [ "${#ACTIVE_SERVICES[@]}" -gt 0 ]; then
+              aws ecs wait services-stable --cluster "$CLUSTER" --services "${ACTIVE_SERVICES[@]}"
             fi
+
+            mapfile -t TASKS < <(
+              {
+                aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING --query "taskArns" --output text
+                aws ecs list-tasks --cluster "$CLUSTER" --desired-status PENDING --query "taskArns" --output text
+              } | tr '\t' '\n'
+            )
+
+            ACTIVE_TASKS=()
+            for TASK in "${TASKS[@]}"; do
+              if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then
+                continue
+              fi
+              echo "Stopping ECS task $TASK."
+              if aws ecs stop-task --cluster "$CLUSTER" --task "$TASK" --reason "GitHub Actions destroy cleanup" >/dev/null; then
+                ACTIVE_TASKS+=("$TASK")
+              else
+                echo "Could not stop $TASK; it may already be stopping."
+              fi
+            done
+
+            if [ "${#ACTIVE_TASKS[@]}" -gt 0 ]; then
+              aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "${ACTIVE_TASKS[@]}"
+            fi
+
+            DELETED_SERVICES=()
+            for SERVICE in "${ACTIVE_SERVICES[@]}"; do
+              echo "Deleting ECS service $SERVICE before stack destroy."
+              if aws ecs delete-service --cluster "$CLUSTER" --service "$SERVICE" --force >/dev/null; then
+                DELETED_SERVICES+=("$SERVICE")
+              else
+                echo "Could not delete $SERVICE; it may already be deleting."
+              fi
+            done
+
+            if [ "${#DELETED_SERVICES[@]}" -gt 0 ]; then
+              aws ecs wait services-inactive --cluster "$CLUSTER" --services "${DELETED_SERVICES[@]}"
+            fi
+
+            echo "Detaching ECS cluster capacity providers before stack destroy."
+            aws ecs put-cluster-capacity-providers \
+              --cli-input-json "{\"cluster\":\"$CLUSTER\",\"capacityProviders\":[],\"defaultCapacityProviderStrategy\":[]}" \
+              >/dev/null || echo "Could not detach capacity providers; they may already be detached or the cluster may be deleting."
+
+            mapfile -t AUTO_SCALING_GROUPS < <(
+              aws cloudformation describe-stack-resources \
+                --stack-name "$STACK_NAME" \
+                --query "StackResources[?ResourceType=='AWS::AutoScaling::AutoScalingGroup'].PhysicalResourceId" \
+                --output text | tr '\t' '\n'
+            )
+
+            for AUTO_SCALING_GROUP in "${AUTO_SCALING_GROUPS[@]}"; do
+              if [ -z "$AUTO_SCALING_GROUP" ] || [ "$AUTO_SCALING_GROUP" = "None" ]; then
+                continue
+              fi
+              echo "Scaling Auto Scaling group $AUTO_SCALING_GROUP to 0."
+              aws autoscaling update-auto-scaling-group \
+                --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
+                --min-size 0 \
+                --desired-capacity 0
+
+              mapfile -t INSTANCE_IDS < <(
+                aws autoscaling describe-auto-scaling-groups \
+                  --auto-scaling-group-names "$AUTO_SCALING_GROUP" \
+                  --query "AutoScalingGroups[0].Instances[].InstanceId" \
+                  --output text | tr '\t' '\n'
+              )
+
+              ACTIVE_INSTANCE_IDS=()
+              for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
+                if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+                  ACTIVE_INSTANCE_IDS+=("$INSTANCE_ID")
+                fi
+              done
+
+              if [ "${#ACTIVE_INSTANCE_IDS[@]}" -gt 0 ]; then
+                aws ec2 wait instance-terminated --instance-ids "${ACTIVE_INSTANCE_IDS[@]}"
+              fi
+            done
           done
 
       - name: CDK destroy
@@ -311,6 +347,8 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: |
           npx cdk destroy --force \
+            "${{ steps.stacks.outputs.app }}" \
+            "${{ steps.stacks.outputs.infra }}" \
             -c deployMode="${{ inputs.deploy_mode }}" \
             -c appImage="${{ steps.app-image.outputs.uri }}" \
             -c desiredAppCount="${{ inputs.desired_app_count }}" \

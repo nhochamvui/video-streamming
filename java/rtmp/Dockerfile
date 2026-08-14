@@ -1,16 +1,17 @@
 FROM golang:1.25-alpine AS go-builder
 WORKDIR /build/go-hls
 COPY go-hls/go.mod go-hls/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY go-hls/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hls-segmenter .
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hls-segmenter .
 
 FROM gradle:8-jdk21 AS builder
 WORKDIR /build
 COPY build.gradle settings.gradle gradle.properties gradlew ./
 COPY gradle gradle
 COPY src src
-RUN ./gradlew shadowJar
+RUN --mount=type=cache,target=/root/.gradle ./gradlew shadowJar --no-daemon
 
 FROM eclipse-temurin:21-jre
 RUN mkdir -p /app/hls
