@@ -42,6 +42,47 @@ shadowJar {
     }
 }
 
+def frontendDir = file("frontend")
+def frontendDist = file("frontend/dist")
+def staticResourcesDir = file("src/main/resources/static")
+
+tasks.register("npmInstall", Exec) {
+    workingDir frontendDir
+    commandLine "npm", "ci"
+    onlyIf {
+        !file("${frontendDir}/node_modules/.package-lock.json").exists()
+    }
+}
+
+tasks.register("buildFrontend", Exec) {
+    dependsOn "npmInstall"
+    workingDir frontendDir
+    commandLine "npm", "run", "build"
+    outputs.dir frontendDist
+    onlyIf {
+        !file("${frontendDist}/index.html").exists()
+    }
+}
+
+tasks.register("copyFrontendDist", Copy) {
+    dependsOn "buildFrontend"
+    from frontendDist
+    into staticResourcesDir
+    include "**/*"
+    doFirst {
+        delete file("${staticResourcesDir}/index.html")
+        delete file("${staticResourcesDir}/assets")
+    }
+}
+
+tasks.named("processResources") {
+    dependsOn "copyFrontendDist"
+}
+
+tasks.named("inspectRuntimeClasspath") {
+    dependsOn "copyFrontendDist"
+}
+
 graalvmNative.toolchainDetection = false
 
 micronaut {
