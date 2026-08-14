@@ -20,4 +20,4 @@ COPY --from=builder /build/build/libs/rtmp-*-all.jar app.jar
 COPY --from=go-builder /out/hls-segmenter /usr/local/bin/hls-segmenter
 RUN chmod +x /usr/local/bin/hls-segmenter
 EXPOSE 8888 1935
-ENTRYPOINT ["java", "-Xms64m", "-Xmx256m", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-Xms64m", "-Xmx256m", "-XX:MaxDirectMemorySize=128m", "-jar", "app.jar"]

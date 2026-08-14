@@ -45,6 +45,8 @@ public class ClientSession {
     private final StreamSessionService streamSessionService;
     private final SafePlaybackPath safePlaybackPath;
     private final String serverId;
+    private final String hlsBucket;
+    private final String hlsRegion;
     private final String connectionId;
     private final String connectionIp;
     private final long connectionStartTime;
@@ -82,12 +84,14 @@ public class ClientSession {
     private volatile String ffmpegSpeed;
     private volatile boolean streaming;
 
-    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId) throws IOException {
+    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId, String hlsBucket, String hlsRegion) throws IOException {
         this.socket = socket;
         this.server = server;
         this.streamSessionService = streamSessionService;
         this.safePlaybackPath = safePlaybackPath;
         this.serverId = serverId;
+        this.hlsBucket = hlsBucket;
+        this.hlsRegion = hlsRegion;
         this.socket.setTcpNoDelay(true);
         this.socket.setSoTimeout(5000);
         this.connectionStartTime = System.currentTimeMillis();
@@ -783,12 +787,19 @@ public class ClientSession {
         new File(hlsBaseDir + "/hd").mkdirs();
         writeMasterPlaylist();
 
-        List<String> command = List.of("hls-segmenter",
+        List<String> command = new ArrayList<>(List.of("hls-segmenter",
                 "--out-dir", hlsBaseDir + "/hd",
                 "--hls-time", "1",
                 "--hls-list-size", "10",
-                "--hls-delete-threshold", "1"
-        );
+                "--hls-delete-threshold", "1"));
+        if (hlsBucket != null && !hlsBucket.isBlank()) {
+            command.add("--s3-bucket");
+            command.add(hlsBucket);
+            if (hlsRegion != null && !hlsRegion.isBlank()) {
+                command.add("--s3-region");
+                command.add(hlsRegion);
+            }
+        }
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.redirectErrorStream(true);

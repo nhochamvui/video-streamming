@@ -59,7 +59,7 @@ Cheap mode creates a small Traefik proxy EC2 instance with an Elastic IP. Point 
 
 By default, cheap mode runs ARM64 ECS app instances on `t4g.micro` and expects the app image to include a `linux/arm64` manifest. To run x86 capacity instead, pass `-c instanceType=t3.micro` and build/push either an amd64 image or a multi-arch image.
 
-The proxy instance is `t4g.nano` because it only runs Traefik, Redis for demo metadata, Docker, and a small backend refresh timer. Keep the ECS app capacity at `t4g.micro` or larger: the app task reserves 384 MiB for the Java RTMP container plus 96 MiB for the HLS uploader, and active streams start FFmpeg processes outside the Java heap.
+The proxy instance is `t4g.nano` because it only runs Traefik, Redis for demo metadata, Docker, and a small backend refresh timer. Keep the ECS app capacity at `t4g.micro` or larger: the app task reserves 384 MiB (hard limit 640 MiB) for the Java RTMP container, and active streams start an `hls-segmenter` process (Go, ~20 MiB) outside the Java heap.
 
 For a one-node demo:
 
@@ -89,7 +89,9 @@ Cheap mode now maps app tasks to ECS EC2 instances with fixed ports:
 - App RTMP on each ECS EC2 instance: `1935`
 - Redis: container on the proxy EC2 private IP, port `6379`
 
-`desiredAppCount` controls both the number of app tasks and the number of ECS EC2 instances. Each app task is placed on a distinct EC2 instance because all app tasks bind the same host ports. Use only one active stream per free-tier-size EC2 instance. FFmpeg remains the real CPU/RAM floor.
+`desiredAppCount` controls both the number of app tasks and the number of ECS EC2 instances. Each app task is placed on a distinct EC2 instance because all app tasks bind the same host ports. Use only one active stream per free-tier-size EC2 instance. `hls-segmenter` and S3 upload remain the real CPU/RAM floor.
+
+HLS is mirrored to S3 by the `hls-segmenter` process itself (no separate uploader container): it PUTs each written segment/playlist asynchronously and prunes expired objects. There is no longer an aws-cli uploader sidecar.
 
 ## Managed Mode
 

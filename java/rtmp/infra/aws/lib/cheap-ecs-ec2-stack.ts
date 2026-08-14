@@ -313,6 +313,7 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   const appContainer = taskDefinition.addContainer('rtmp-app', {
     image: ContainerImage.fromRegistry(config.appImage),
     memoryReservationMiB: 384,
+    memoryLimitMiB: 640,
     secrets: {
       RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter)
     },
@@ -323,7 +324,9 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_PORT: '1935',
       RTMP_ENDPOINT: `rtmp://${config.rtmpHost}:1935/live`,
       RTMP_PLAYBACK_BASE_URL: `https://${refs.distributionDomainName}`,
-      RTMP_HLS_ROOT: '/app/hls'
+      RTMP_HLS_ROOT: '/app/hls',
+      RTMP_HLS_BUCKET: refs.bucketName,
+      RTMP_HLS_REGION: Stack.of(scope).region
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });
@@ -332,16 +335,6 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     { containerPort: 1935, hostPort: 1935 }
   );
   appContainer.addMountPoints({ containerPath: '/app/hls', sourceVolume: 'hls', readOnly: false });
-
-  const uploader = taskDefinition.addContainer('hls-uploader', {
-    image: ContainerImage.fromRegistry('public.ecr.aws/aws-cli/aws-cli:latest'),
-    essential: false,
-    memoryReservationMiB: 96,
-    entryPoint: ['sh', '-c'],
-    command: [hlsUploadCommand(refs.bucketName)],
-    logging: new AwsLogDriver({ streamPrefix: 'uploader', logGroup })
-  });
-  uploader.addMountPoints({ containerPath: '/app/hls', sourceVolume: 'hls', readOnly: true });
 
   new Ec2Service(scope, 'AppService', {
     cluster,
@@ -384,15 +377,4 @@ export class CheapEcsEc2Stack extends Stack {
 function ecsAmiHardwareType(instanceTypeName: string): AmiHardwareType {
   const family = instanceTypeName.split('.')[0].toLowerCase();
   return family === 'a1' || family.endsWith('g') ? AmiHardwareType.ARM : AmiHardwareType.STANDARD;
-}
-
-function hlsUploadCommand(bucketName: string): string {
-  return [
-    'while true; do',
-    `  find /app/hls -mindepth 1 -maxdepth 1 -type d -exec sh -c 'for stream_dir do stream="\${stream_dir#/app/hls/}"; aws s3 sync "$stream_dir/" "s3://${bucketName}/hls/$stream/" --exclude "*.m3u8" --cache-control "public,max-age=10"; done' sh {} +;`,
-    `  find /app/hls -name '*.m3u8' -type f -exec sh -c 'for file do key="\${file#/app/hls/}"; aws s3 cp "$file" "s3://${bucketName}/hls/$key" --cache-control "no-cache,no-store,must-revalidate" --content-type "application/vnd.apple.mpegurl"; done' sh {} +;`,
-    `  find /app/hls -mindepth 1 -maxdepth 1 -type d -exec sh -c 'for stream_dir do stream="\${stream_dir#/app/hls/}"; max="\$(grep -oE "output_[0-9]+\\.m4s" "\$stream_dir/hd/output.m3u8" | grep -oE "[0-9]+" | sort -n | tail -1)"; [ -z "\$max" ] && continue; floor=\$((max > 15 ? max - 15 : 0)); aws s3 ls "s3://${bucketName}/hls/\$stream/hd/" | grep -oE "output_[0-9]+\\.m4s" | while read -r f; do idx="\${f#output_}"; idx="\${idx%.m4s}"; [ "\$idx" -lt "\$floor" ] && aws s3 rm "s3://${bucketName}/hls/\$stream/hd/\$f" --only-show-errors < /dev/null; done; done' sh {} +;`,
-    '  sleep 1;',
-    'done'
-  ].join(' ');
 }

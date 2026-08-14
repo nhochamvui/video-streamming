@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -13,10 +14,12 @@ func main() {
 	targetDur := flag.Float64("hls-time", 1.0, "target segment duration in seconds")
 	listSize := flag.Int("hls-list-size", 10, "playlist window size")
 	deleteThreshold := flag.Int("hls-delete-threshold", 1, "keep N segments beyond the window before deleting")
+	s3Bucket := flag.String("s3-bucket", "", "S3 bucket to mirror HLS output to (empty = local only)")
+	s3Region := flag.String("s3-region", "", "AWS region for S3 (defaults to SDK/IMDS resolution)")
 	flag.Parse()
 
 	if *outDir == "" {
-		fmt.Fprintln(os.Stderr, "usage: hls-segmenter --out-dir <dir> [--hls-time 1] [--hls-list-size 10] [--hls-delete-threshold 1]")
+		fmt.Fprintln(os.Stderr, "usage: hls-segmenter --out-dir <dir> [--hls-time 1] [--hls-list-size 10] [--hls-delete-threshold 1] [--s3-bucket <bucket>] [--s3-region <region>]")
 		os.Exit(1)
 	}
 
@@ -26,6 +29,19 @@ func main() {
 	}
 
 	seg := NewSegmenter(*outDir, int64(*targetDur*1000), *listSize, *deleteThreshold)
+
+	ctx := context.Background()
+	var uploader *s3Uploader
+	if *s3Bucket != "" {
+		u, err := newS3Uploader(ctx, *s3Bucket, *s3Region)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot init S3 uploader: %v\n", err)
+			os.Exit(1)
+		}
+		uploader = u
+		uploader.Start()
+		seg.SetUploader(uploader)
+	}
 
 	// periodic progress output (parsed by the Java host for fps/bitrate/speed stats)
 	stop := make(chan struct{})
@@ -48,6 +64,12 @@ func main() {
 	if err := seg.Finish(); err != nil {
 		fmt.Fprintf(os.Stderr, "finish error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if uploader != nil {
+		closeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		uploader.Close(closeCtx)
 	}
 }
 

@@ -27,20 +27,26 @@ public class Server {
     private final NodeRegistry nodeRegistry;
     private final String serverId;
     private final int port;
+    private final String hlsBucket;
+    private final String hlsRegion;
 
     public Server(
             StreamSessionService streamSessionService,
             SafePlaybackPath safePlaybackPath,
             NodeRegistry nodeRegistry,
             ServerIdentity serverIdentity,
-            @Value("${rtmp.port:1935}") int port
+            @Value("${rtmp.port:1935}") int port,
+            @Value("${rtmp.hls.bucket:}") String hlsBucket,
+            @Value("${rtmp.hls.region:}") String hlsRegion
     ) {
         this.streamSessionService = streamSessionService;
         this.safePlaybackPath = safePlaybackPath;
         this.nodeRegistry = nodeRegistry;
         this.serverId = serverIdentity.serverId();
         this.port = port;
-        log.info("RTMP Server initialized | serverId={} | port={}", this.serverId, port);
+        this.hlsBucket = hlsBucket;
+        this.hlsRegion = hlsRegion;
+        log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={}", this.serverId, port, hlsBucket, hlsRegion);
     }
 
     public void listen() {
@@ -52,7 +58,7 @@ public class Server {
                     Socket socket = serverSocket.accept();
                     Thread.ofVirtual().start(() -> {
                         try (socket) {
-                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId).run();
+                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId, hlsBucket, hlsRegion).run();
                         } catch (Exception e) {
                             log.error("ClientSession fatal error", e);
                         }

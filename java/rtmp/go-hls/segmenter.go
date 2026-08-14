@@ -60,9 +60,50 @@ type Segmenter struct {
 	curA           []*sample
 	written        []segment
 
+	uploader        Uploader
+	lastMasterMtime int64
+
 	frames    int64
 	bytes     int64
 	startedAt time.Time
+}
+
+// SetUploader attaches the S3 mirror; nil (default) keeps local-only behavior.
+func (s *Segmenter) SetUploader(u Uploader) {
+	s.uploader = u
+}
+
+// s3Prefix derives the object-key prefix from the output directory layout
+// <root>/<stream>/hd, matching the S3 layout hls/<stream>/hd/...
+func (s *Segmenter) s3Prefix() string {
+	return "hls/" + filepath.Base(filepath.Dir(s.outDir))
+}
+
+func (s *Segmenter) uploadSegment(name string) {
+	if s.uploader == nil {
+		return
+	}
+	s.uploader.PutSegment(s.s3Prefix()+"/hd/"+name, filepath.Join(s.outDir, name))
+}
+
+func (s *Segmenter) uploadPlaylist(name string) {
+	if s.uploader == nil {
+		return
+	}
+	s.uploader.PutPlaylist(s.s3Prefix()+"/hd/"+name, filepath.Join(s.outDir, name))
+}
+
+func (s *Segmenter) uploadMasterIfChanged() {
+	if s.uploader == nil {
+		return
+	}
+	master := filepath.Join(filepath.Dir(s.outDir), "master.m3u8")
+	info, err := os.Stat(master)
+	if err != nil || info.ModTime().UnixNano() == s.lastMasterMtime {
+		return
+	}
+	s.lastMasterMtime = info.ModTime().UnixNano()
+	s.uploader.PutPlaylistReliable(s.s3Prefix()+"/master.m3u8", master)
 }
 
 func NewSegmenter(outDir string, targetDurMS int64, listSize, deleteThreshold int) *Segmenter {
@@ -349,13 +390,19 @@ func (s *Segmenter) ensureInit(force bool) error {
 		return err
 	}
 	s.initWritten = true
+	s.uploadSegment("init.mp4")
 	return nil
 }
 
 func (s *Segmenter) writeFrag(part *fmp4.Part, name string) error {
-	return writeSeekerAtomic(s.outDir, name, func(f *os.File) error {
+	err := writeSeekerAtomic(s.outDir, name, func(f *os.File) error {
 		return part.Marshal(f)
 	})
+	if err != nil {
+		return err
+	}
+	s.uploadSegment(name)
+	return nil
 }
 
 func writeSeekerAtomic(dir, name string, fn func(*os.File) error) error {
@@ -425,9 +472,15 @@ func (s *Segmenter) emitPlaylist() {
 	if len(s.written) > s.listSize {
 		firstInWindow := s.written[len(s.written)-s.listSize].num
 		oldestKeep := firstInWindow - s.deleteThreshold
+		// keep a wider window on S3 (15 segments) so viewers behind by a few
+		// seconds on stale playlists still find their segments
+		s3Floor := s.written[len(s.written)-1].num - 15
 		for _, e := range s.written[:len(s.written)-s.listSize] {
 			if e.num < oldestKeep {
 				_ = os.Remove(filepath.Join(s.outDir, fmt.Sprintf("output_%d.m4s", e.num)))
+				if s.uploader != nil && e.num < s3Floor {
+					s.uploader.Delete(s.s3Prefix() + "/hd/" + fmt.Sprintf("output_%d.m4s", e.num))
+				}
 			}
 		}
 	}
@@ -437,6 +490,9 @@ func (s *Segmenter) emitPlaylist() {
 		return
 	}
 	_ = os.Rename(tmp, filepath.Join(s.outDir, "output.m3u8"))
+
+	s.uploadPlaylist("output.m3u8")
+	s.uploadMasterIfChanged()
 }
 
 // Finish flushes trailing samples and appends ENDLIST.
@@ -469,6 +525,11 @@ func (s *Segmenter) Finish() error {
 		if !strings.Contains(str, "#EXT-X-ENDLIST") {
 			_ = os.WriteFile(pl, []byte(str+"#EXT-X-ENDLIST\n"), 0o644)
 		}
+	}
+
+	// stream ended: remove the stream's objects from S3
+	if s.uploader != nil {
+		s.uploader.DeleteAll(s.s3Prefix())
 	}
 	return nil
 }

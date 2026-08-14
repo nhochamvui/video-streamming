@@ -6,8 +6,48 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+type fakeUploader struct {
+	mu     sync.Mutex
+	puts   map[string]string // key -> localPath
+	dels   []string
+	delAll []string
+}
+
+func newFakeUploader() *fakeUploader {
+	return &fakeUploader{puts: map[string]string{}}
+}
+
+func (f *fakeUploader) PutSegment(key, localPath string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.puts[key] = localPath
+}
+
+func (f *fakeUploader) PutPlaylist(key, localPath string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.puts[key] = localPath
+}
+
+func (f *fakeUploader) PutPlaylistReliable(key, localPath string) {
+	f.PutPlaylist(key, localPath)
+}
+
+func (f *fakeUploader) Delete(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dels = append(f.dels, key)
+}
+
+func (f *fakeUploader) DeleteAll(prefix string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.delAll = append(f.delAll, prefix)
+}
 
 // real config bytes extracted from a reference FLV produced by ffmpeg
 const (
@@ -94,7 +134,77 @@ func newTestSegmenter(t *testing.T, targetMS int64) (*Segmenter, string) {
 	return s, dir
 }
 
+func TestS3Mirroring(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSegmenter(dir, 1000, 10, 1)
+	up := newFakeUploader()
+	s.SetUploader(up)
+
+	// master.m3u8 is written by the Java host before the segmenter starts
+	master := filepath.Join(filepath.Dir(dir), "master.m3u8")
+	if err := os.WriteFile(master, []byte("#EXTM3U\n"), 0o644); err != nil {
+		t.Fatalf("write master: %v", err)
+	}
+
+	s.Process(tagTypeVideo, 0, testAVCConfig())
+	s.Process(tagTypeAudio, 0, testAACConfig())
+
+	last := feedVideo(s, 0, 125, 25, 25)
+	feedAudio(s, 0, last)
+	if err := s.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	prefix := "hls/" + filepath.Base(filepath.Dir(dir))
+	for i := 1; i <= 5; i++ {
+		key := prefix + "/hd/output_" + string(rune('0'+i)) + ".m4s"
+		if _, ok := up.puts[key]; !ok {
+			t.Errorf("segment %d not uploaded (missing %s)", i, key)
+		}
+	}
+	for _, key := range []string{
+		prefix + "/hd/init.mp4",
+		prefix + "/hd/output.m3u8",
+		prefix + "/master.m3u8",
+	} {
+		if _, ok := up.puts[key]; !ok {
+			t.Errorf("missing upload key %s (have %v)", key, up.puts)
+		}
+	}
+	if len(up.delAll) != 1 || up.delAll[0] != prefix {
+		t.Errorf("expected DeleteAll(%s) on finish, got %v", prefix, up.delAll)
+	}
+}
+
+func TestS3MirrorPrunesExpiredSegments(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSegmenter(dir, 1000, 10, 1)
+	up := newFakeUploader()
+	s.SetUploader(up)
+
+	s.Process(tagTypeVideo, 0, testAVCConfig())
+	s.Process(tagTypeAudio, 0, testAACConfig())
+
+	// 15 segments > listSize 10
+	last := feedVideo(s, 0, 375, 25, 25)
+	feedAudio(s, 0, last)
+	if err := s.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	// local window 10 + threshold 1 => output_4 pruned locally; S3 floor keeps 15
+	// => only output_1..4 are pruned locally, and S3 keep = 15 (no S3 deletes fired)
+	if len(up.dels) != 0 {
+		t.Errorf("no S3 deletes expected with 15-segment window (s3Floor=0), got %v", up.dels)
+	}
+	// output_5 must be pruned locally
+	if _, err := os.Stat(filepath.Join(dir, "output_5.m4s")); err != nil {
+		t.Errorf("output_5 should still exist locally, err=%v", err)
+	}
+}
+
 func TestBasicSegmentation(t *testing.T) {
+
 	s, dir := newTestSegmenter(t, 1000)
 
 	s.Process(tagTypeVideo, 0, testAVCConfig())
