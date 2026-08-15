@@ -1,0 +1,14 @@
+@use 'variables' as *;
+@use 'mixins' as *;
+
+.status {
+  @include status-base;
+
+  &--ok {
+    color: $color-ok;
+  }
+
+  &--error {
+    color: $color-bad;
+  }
+}

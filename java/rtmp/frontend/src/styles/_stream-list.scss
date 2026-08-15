@@ -1,0 +1,10 @@
+@use 'variables' as *;
+
+.stream-list {
+  margin: 0;
+  padding-left: 22px;
+
+  &__empty {
+    color: $color-text-faint;
+  }
+}

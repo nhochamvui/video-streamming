@@ -1,0 +1,98 @@
+@use 'variables' as *;
+
+.status-bar {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  background: $color-bg-raised;
+  border-radius: $radius-sm;
+  border: 1px solid $color-border-strong;
+
+  &__label {
+    color: $color-idle;
+  }
+
+  &__value {
+    color: $color-text;
+    font-weight: bold;
+  }
+}
+
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+
+  &--live {
+    background: $color-good;
+    box-shadow: 0 0 6px $color-good;
+  }
+
+  &--idle {
+    background: $color-idle;
+  }
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: $color-bg-raised;
+  border-radius: $radius-sm;
+  border: 1px solid $color-border-strong;
+  overflow: hidden;
+
+  th {
+    background: #21262d;
+    color: $color-idle;
+    font-weight: normal;
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  td {
+    padding: 10px 14px;
+    border-top: 1px solid #21262d;
+    font-size: 13px;
+  }
+
+  tr:hover {
+    background: $color-bg-hover;
+  }
+
+  &__good {
+    color: $color-good;
+  }
+
+  &__warn {
+    color: $color-warn;
+  }
+
+  &__bad {
+    color: $color-bad;
+  }
+}
+
+.no-streams {
+  text-align: center;
+  padding: 48px;
+  color: $color-idle;
+
+  &__hint {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #484f58;
+  }
+}
+
+.footer {
+  margin-top: 16px;
+  font-size: 11px;
+  color: #484f58;
+  text-align: right;
+}

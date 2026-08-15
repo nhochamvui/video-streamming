@@ -1,0 +1,57 @@
+@use 'variables' as *;
+
+.intro {
+  color: $color-text-muted;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.nav {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+
+  a {
+    color: $color-link-strong;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.player {
+  width: 100%;
+  max-width: $max-width;
+  margin: 0 auto;
+
+  &__frame {
+    background: #111;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 0;
+  }
+}
+
+.not-found {
+  font-family: $font-mono;
+  padding: 2em;
+
+  &__title {
+    font-size: 22px;
+    margin: 0 0 8px;
+  }
+}
+
+.loading {
+  color: $color-text-muted;
+}
+
+.result {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}

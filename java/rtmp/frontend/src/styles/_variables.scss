@@ -1,0 +1,35 @@
+// Design tokens — mirrored from the original inline styles
+$color-bg: #101418;
+$color-bg-raised: #171d23;
+$color-bg-sunken: #0d1117;
+$color-bg-hover: #1c2128;
+
+$color-border: #2d3741;
+$color-border-strong: #3a4652;
+
+$color-text: #e5edf3;
+$color-text-muted: #aab7c4;
+$color-text-faint: #8f9daa;
+$color-text-code: #f0f6fc;
+
+$color-link: #79c0ff;
+$color-link-strong: #58a6ff;
+
+$color-primary: #1f6feb;
+$color-primary-border: #3d8bfd;
+$color-secondary: #222a32;
+
+$color-ok: #7ee787;
+$color-warn: #d29922;
+$color-bad: #ff8d8d;
+$color-good: #3fb950;
+$color-idle: #8b949e;
+
+$font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+$radius: 8px;
+$radius-sm: 6px;
+
+$breakpoint-mobile: 720px;
+
+$max-width: 960px;

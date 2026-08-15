@@ -1,0 +1,23 @@
+@use 'variables' as *;
+@use 'mixins' as *;
+
+.field {
+  @include field-grid;
+
+  &__label {
+    @include label;
+  }
+
+  &__value {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: $color-text-code;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: $breakpoint-mobile) {
+  .field {
+    grid-template-columns: 1fr;
+  }
+}

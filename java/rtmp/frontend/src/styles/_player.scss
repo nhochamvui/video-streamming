@@ -1,0 +1,6 @@
+@use 'variables' as *;
+
+.video-js {
+  width: 100%;
+  max-width: $max-width;
+}

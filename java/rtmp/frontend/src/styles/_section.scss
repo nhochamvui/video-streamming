@@ -1,0 +1,9 @@
+@use 'mixins' as *;
+
+.section {
+  @include section-shell;
+
+  &__title {
+    @include section-title;
+  }
+}

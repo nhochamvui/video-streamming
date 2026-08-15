@@ -1,0 +1,27 @@
+@use 'variables' as *;
+@use 'mixins' as *;
+
+.button,
+.button-link {
+  @include button-reset;
+
+  &.button--secondary {
+    @include button-secondary;
+  }
+
+  &:disabled {
+    @include button-disabled;
+  }
+}
+
+.button-link {
+  border: 1px solid $color-primary-border;
+  background: $color-primary;
+}
+
+@media (max-width: $breakpoint-mobile) {
+  .button,
+  .button-link {
+    width: 100%;
+  }
+}
