@@ -82,7 +82,7 @@ env:
 jobs:
   cdk:
     name: ${{ inputs.action }} ${{ inputs.deploy_mode }} stack
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
 
     steps:
