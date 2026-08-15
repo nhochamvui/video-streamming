@@ -13,7 +13,7 @@ export function CreateSessionCard() {
   const remaining = useCountdown(expiresAt)
 
   const busy = status === 'loading'
-  const expired = session !== null && remaining === 0
+  const expired = session !== null && expiresAt !== null && Date.now() >= expiresAt
 
   useEffect(() => {
     if (expired) {
