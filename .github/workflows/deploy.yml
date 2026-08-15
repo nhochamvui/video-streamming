@@ -31,11 +31,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: java/rtmp/frontend
+          file: java/rtmp/frontend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/nhochamvui/video-streamming-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: java/rtmp
           push: true
+          build-contexts: |
+            frontend=docker-image://ghcr.io/nhochamvui/video-streamming-frontend:latest
           tags: |
             ghcr.io/nhochamvui/video-streamming:latest
             ghcr.io/nhochamvui/video-streamming:${{ env.VERSION }}
