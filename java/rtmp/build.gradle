@@ -45,12 +45,13 @@ shadowJar {
 def frontendDir = file("frontend")
 def frontendDist = file("frontend/dist")
 def staticResourcesDir = file("src/main/resources/static")
+def skipFrontendBuild = project.hasProperty("skipFrontendBuild")
 
 tasks.register("npmInstall", Exec) {
     workingDir frontendDir
     commandLine "npm", "ci"
     onlyIf {
-        !file("${frontendDir}/node_modules/.package-lock.json").exists()
+        !skipFrontendBuild && !file("${frontendDir}/node_modules/.package-lock.json").exists()
     }
 }
 
@@ -60,7 +61,7 @@ tasks.register("buildFrontend", Exec) {
     commandLine "npm", "run", "build"
     outputs.dir frontendDist
     onlyIf {
-        !file("${frontendDist}/index.html").exists()
+        !skipFrontendBuild && !file("${frontendDist}/index.html").exists()
     }
 }
 
