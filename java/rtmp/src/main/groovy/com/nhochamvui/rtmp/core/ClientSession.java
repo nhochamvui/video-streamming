@@ -789,7 +789,7 @@ public class ClientSession {
 
         List<String> command = new ArrayList<>(List.of("hls-segmenter",
                 "--out-dir", hlsBaseDir + "/hd",
-                "--hls-time", "1",
+                "--hls-time", "2",
                 "--hls-list-size", "10",
                 "--hls-delete-threshold", "1"));
         if (hlsBucket != null && !hlsBucket.isBlank()) {

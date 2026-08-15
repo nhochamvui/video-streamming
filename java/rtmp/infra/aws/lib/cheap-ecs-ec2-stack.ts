@@ -262,7 +262,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   new cdk.CfnOutput(scope, 'ProxyElasticIp', { value: proxyElasticIp.ref });
   new cdk.CfnOutput(scope, 'ProxyInstanceId', { value: proxyInstance.instanceId });
   new cdk.CfnOutput(scope, 'AutoScalingGroupName', { value: autoScalingGroup.autoScalingGroupName });
-  new cdk.CfnOutput(scope, 'PlaybackBaseUrl', { value: `https://${storage.distribution.distributionDomainName}` });
+  new cdk.CfnOutput(scope, 'PlaybackBaseUrl', { value: `http://${config.rtmpHost}` });
   new cdk.CfnOutput(scope, 'HlsBucketName', { value: storage.bucket.bucketName });
   new cdk.CfnOutput(scope, 'DomainConfiguration', { value: `Point ${config.rtmpHost} to Elastic IP ${proxyElasticIp.ref}` });
 
@@ -323,7 +323,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_SERVER_ID: 'auto',
       RTMP_PORT: '1935',
       RTMP_ENDPOINT: `rtmp://${config.rtmpHost}:1935/live`,
-      RTMP_PLAYBACK_BASE_URL: `https://${refs.distributionDomainName}`,
+      RTMP_PLAYBACK_BASE_URL: `http://${config.rtmpHost}`,
+      RTMP_HLS_CDN_URL: `https://${refs.distributionDomainName}`,
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region

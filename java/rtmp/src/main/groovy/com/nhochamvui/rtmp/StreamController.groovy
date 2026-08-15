@@ -12,8 +12,19 @@ class StreamController {
     private final Server server
     private String indexHtml
 
+    @io.micronaut.context.annotation.Value('${rtmp.hls.cdn-url:}')
+    String hlsCdnUrl
+
     StreamController(Server server) {
         this.server = server
+    }
+
+    @Get("/config")
+    @Produces(MediaType.APPLICATION_JSON)
+    Map config() {
+        return [
+            hlsCdn: hlsCdnUrl
+        ]
     }
 
     @Get(produces = MediaType.TEXT_HTML)

@@ -159,7 +159,7 @@ export function createManagedInfra(scope: Construct, config: InfraConfig): Manag
     resources: [`arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`]
   }));
 
-  new cdk.CfnOutput(scope, 'PlaybackBaseUrl', { value: `https://${storage.distribution.distributionDomainName}` });
+  new cdk.CfnOutput(scope, 'PlaybackBaseUrl', { value: `http://${config.rtmpHost}` });
   new cdk.CfnOutput(scope, 'HlsBucketName', { value: storage.bucket.bucketName });
   new cdk.CfnOutput(scope, 'ManagedModeWarning', {
     value: 'Scale desiredCount to 0 or destroy this stack immediately after demos to avoid hourly service costs.'
@@ -228,7 +228,8 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
       RTMP_SERVER_ID: 'managed-fargate-node',
       RTMP_PORT: '1935',
       RTMP_ENDPOINT: `rtmp://${advertisedRtmpHost}:1935/live`,
-      RTMP_PLAYBACK_BASE_URL: `https://${refs.distributionDomainName}`,
+      RTMP_PLAYBACK_BASE_URL: `http://${advertisedRtmpHost}`,
+      RTMP_HLS_CDN_URL: `https://${refs.distributionDomainName}`,
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region
