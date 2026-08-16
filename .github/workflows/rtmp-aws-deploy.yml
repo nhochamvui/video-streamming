@@ -20,6 +20,14 @@ on:
         options:
           - cheap
           - managed
+      build_type:
+        description: "App image build type: native (Dockerfile.native) or jvm (Dockerfile)"
+        required: false
+        type: choice
+        default: "jvm"
+        options:
+          - jvm
+          - native
       aws_region:
         description: "AWS region"
         required: true
@@ -89,7 +97,7 @@ jobs:
   cdk:
     name: ${{ inputs.action }} ${{ inputs.deploy_mode }} stack
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -156,6 +164,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: java/rtmp
+          file: ${{ inputs.build_type == 'native' && 'java/rtmp/Dockerfile.native' || 'java/rtmp/Dockerfile' }}
           platforms: linux/arm64
           push: true
           build-contexts: |
