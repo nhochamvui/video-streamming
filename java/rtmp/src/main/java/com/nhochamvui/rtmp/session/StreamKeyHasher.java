@@ -14,7 +14,7 @@ public class StreamKeyHasher {
 
     private final byte[] serverSecret;
 
-    public StreamKeyHasher(@Value("${rtmp.auth.hmac-secret:}") String serverSecret) {
+    public StreamKeyHasher(@Value("${rtmp.auth.hmac-secret:123456789123456789123456789123456789}") String serverSecret) {
         this.serverSecret = serverSecret == null ? new byte[0] : serverSecret.getBytes(StandardCharsets.UTF_8);
     }
 

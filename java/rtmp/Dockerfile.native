@@ -8,20 +8,22 @@ COPY go-hls/ ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hls-segmenter .
 
-FROM gradle:8-jdk21 AS builder
+FROM ghcr.io/graalvm/native-image-community:21-ol9 AS native-builder
+RUN microdnf install -y findutils && microdnf clean all
 WORKDIR /build
 COPY build.gradle settings.gradle gradle.properties gradlew ./
 COPY gradle gradle
 COPY src src
 COPY --from=frontend /dist frontend/dist
 RUN --mount=type=cache,target=/root/.gradle \
-    sed -i 's/\r$//' gradlew && chmod +x gradlew && ./gradlew shadowJar -PskipFrontendBuild --no-daemon
+    sed -i 's/\r$//' gradlew && chmod +x gradlew && \
+    ./gradlew nativeCompile -PskipFrontendBuild --no-daemon
 
-FROM eclipse-temurin:21-jre
+FROM debian:bookworm-slim
 RUN mkdir -p /app/hls
 WORKDIR /app
-COPY --from=builder /build/build/libs/rtmp-*-all.jar app.jar
+COPY --from=native-builder /build/build/native/nativeCompile/rtmp /app/rtmp
 COPY --from=go-builder /out/hls-segmenter /usr/local/bin/hls-segmenter
-RUN chmod +x /usr/local/bin/hls-segmenter
+RUN chmod +x /app/rtmp /usr/local/bin/hls-segmenter
 EXPOSE 8888 1935
-ENTRYPOINT ["java", "-Xms64m", "-Xmx256m", "-XX:MaxDirectMemorySize=128m", "-jar", "app.jar"]
+ENTRYPOINT ["/app/rtmp"]

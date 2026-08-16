@@ -7,6 +7,8 @@ import com.nhochamvui.rtmp.session.ServerIdentity;
 import com.nhochamvui.rtmp.session.StreamSessionService;
 import io.micronaut.context.annotation.Value;
 import io.micronaut.scheduling.annotation.Scheduled;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -19,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Singleton
 public class Server {
 
-    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Server.class);
+    private static final Logger log = LoggerFactory.getLogger(Server.class);
 
     private final ConcurrentHashMap<String, ClientSession> streams = new ConcurrentHashMap<>();
     private final StreamSessionService streamSessionService;
@@ -87,10 +89,6 @@ public class Server {
 
     public Set<String> getActiveStreamNames() {
         return Set.copyOf(streams.keySet());
-    }
-
-    public boolean hasStream(String name) {
-        return streams.containsKey(name);
     }
 
     public Map<String, ClientSession> getActiveStreams() {

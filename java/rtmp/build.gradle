@@ -13,17 +13,17 @@ repositories {
 }
 
 dependencies {
+    annotationProcessor("io.micronaut:micronaut-http-validation")
+    annotationProcessor("io.micronaut.serde:micronaut-serde-processor")
     implementation("io.micronaut:micronaut-aop")
     implementation("io.micronaut:micronaut-jackson-databind")
-    implementation("io.micronaut.groovy:micronaut-runtime-groovy")
     // implementation("io.micronaut:micronaut-scheduling")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
     implementation("io.lettuce:lettuce-core:6.5.5.RELEASE")
     compileOnly("io.micronaut:micronaut-http-client")
-    compileOnly("io.micronaut:micronaut-http-validation")
-    compileOnly("io.micronaut.serde:micronaut-serde-processor")
     runtimeOnly("ch.qos.logback:logback-classic")
     testImplementation("io.micronaut:micronaut-http-client")
+    testImplementation("org.apache.groovy:groovy:4.0.14")
 }
 
 
@@ -85,6 +85,16 @@ tasks.named("inspectRuntimeClasspath") {
 }
 
 graalvmNative.toolchainDetection = false
+
+def nativeImageMemory = System.getenv("NATIVE_IMAGE_MEMORY") ?: "-J-Xmx8g"
+
+graalvmNative.binaries.main {
+    buildArgs.addAll(
+        "--report-unsupported-elements-at-runtime",
+        "--no-fallback",
+        nativeImageMemory
+    )
+}
 
 micronaut {
     runtime("netty")

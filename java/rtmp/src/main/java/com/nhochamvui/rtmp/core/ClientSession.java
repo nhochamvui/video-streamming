@@ -6,10 +6,10 @@ import com.nhochamvui.rtmp.core.models.AMF0Message;
 import com.nhochamvui.rtmp.core.models.Basic;
 import com.nhochamvui.rtmp.core.models.Message;
 import com.nhochamvui.rtmp.core.models.RTMPHeader;
+import com.nhochamvui.rtmp.core.models.Tuple2;
 import com.nhochamvui.rtmp.session.PublishValidation;
 import com.nhochamvui.rtmp.session.SafePlaybackPath;
 import com.nhochamvui.rtmp.session.StreamSessionService;
-import groovy.lang.Tuple2;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.slf4j.MDC;
@@ -147,8 +147,6 @@ public class ClientSession {
     public String getStreamName() {
         return streamName;
     }
-
-    // ─── Handshake ───────────────────────────────────────────────
 
     private void handleHandShake() throws IOException {
         log.info("[{}] Handshake started.", connectionId);

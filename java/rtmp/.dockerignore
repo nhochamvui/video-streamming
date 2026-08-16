@@ -9,6 +9,8 @@ docker-compose.yml
 nginx.conf
 micronaut-cli.yml
 README.md
+hls
+logs
 frontend/node_modules
 frontend/dist
 src/main/resources/static/index.html
