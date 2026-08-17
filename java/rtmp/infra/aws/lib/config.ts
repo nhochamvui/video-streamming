@@ -14,6 +14,7 @@ export interface InfraConfig {
   readonly enableNlb: boolean;
   readonly enableElastiCache: boolean;
   readonly adminCidr: string;
+  readonly netdataCidr: string;
   readonly rtmpHost: string;
 }
 
@@ -38,6 +39,7 @@ export function getConfig(app: cdk.App): InfraConfig {
     enableNlb: readBoolean(app, 'enableNlb', false),
     enableElastiCache: readBoolean(app, 'enableElastiCache', false),
     adminCidr: readString(app, 'adminCidr', '0.0.0.0/0'),
+    netdataCidr: readString(app, 'netdataCidr', '42.117.146.241/32'),
     rtmpHost: readString(app, 'rtmpHost', 'replace-after-deploy.example.com')
   };
 }

@@ -83,13 +83,17 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   securityGroup.addIngressRule(proxySecurityGroup, Port.tcp(8888), 'HTTP from Traefik proxy');
   securityGroup.addIngressRule(proxySecurityGroup, Port.tcp(1935), 'RTMP from Traefik proxy');
   securityGroup.addIngressRule(Peer.ipv4(config.adminCidr), Port.tcp(22), 'Optional SSH from admin CIDR');
+  securityGroup.addIngressRule(Peer.ipv4(config.netdataCidr), Port.tcp(19999), 'Netdata dashboard from admin CIDR');
   proxySecurityGroup.addIngressRule(securityGroup, Port.tcp(6379), 'Redis from ECS app instances');
 
   const cluster = new Cluster(scope, 'Cluster', { vpc });
   const userData = UserData.forLinux();
   userData.addCommands(
     'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
-    'echo \'ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"]\' >> /etc/ecs/ecs.config'
+    'echo \'ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"]\' >> /etc/ecs/ecs.config',
+    'curl -sSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh',
+    'sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --no-updates --disable-cloud',
+    'usermod -aG docker netdata && systemctl restart netdata'
   );
 
   const instanceRole = new Role(scope, 'EcsInstanceRole', {
