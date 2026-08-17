@@ -1,11 +1,13 @@
 import { configureStore } from '@reduxjs/toolkit'
 import sessionReducer from './sessionSlice'
 import streamsReducer from './streamsSlice'
+import authReducer from './authSlice'
 
 export const store = configureStore({
   reducer: {
     session: sessionReducer,
     streams: streamsReducer,
+    auth: authReducer,
   },
 })
 

@@ -1,0 +1,43 @@
+@use 'variables' as *;
+@use 'mixins' as *;
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 320px;
+
+  &__label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    span {
+      @include label;
+    }
+
+    input {
+      appearance: none;
+      border: 1px solid $color-border-strong;
+      background: $color-bg-sunken;
+      color: $color-text-code;
+      border-radius: $radius-sm;
+      padding: 8px 10px;
+      font: inherit;
+      min-height: 36px;
+
+      &:focus {
+        outline: none;
+        border-color: $color-primary-border;
+      }
+
+      &:disabled {
+        opacity: 0.55;
+      }
+    }
+  }
+
+  .button {
+    align-self: flex-start;
+  }
+}

@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
 import { createSession, sessionExpired } from '../../store/sessionSlice'
+import { checkAuth } from '../../store/authSlice'
+import { LoginForm } from '../auth/LoginForm'
 import { useCountdown, formatCountdown } from '../../hooks/useCountdown'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
@@ -9,17 +11,29 @@ import { CopyButton } from '../ui/CopyButton'
 
 export function CreateSessionCard() {
   const dispatch = useAppDispatch()
-  const { status, error, session, expiresAt } = useAppSelector((state) => state.session)
+  const auth = useAppSelector((state) => state.auth)
+  const { status, error, statusCode, session, expiresAt } = useAppSelector((state) => state.session)
   const remaining = useCountdown(expiresAt)
 
   const busy = status === 'loading'
   const expired = session !== null && expiresAt !== null && Date.now() >= expiresAt
 
   useEffect(() => {
+    void dispatch(checkAuth())
+  }, [dispatch])
+
+  useEffect(() => {
     if (expired) {
       dispatch(sessionExpired())
     }
   }, [expired, dispatch])
+
+  useEffect(() => {
+    if (statusCode === 401) {
+      dispatch(sessionExpired())
+      void dispatch(checkAuth())
+    }
+  }, [statusCode, dispatch])
 
   const handleCreate = () => {
     void dispatch(createSession())
@@ -32,6 +46,19 @@ export function CreateSessionCard() {
       : status === 'success' && session
         ? 'Stream key created. Start publishing before it expires.'
         : ''
+
+  if (auth.status === 'checking') {
+    return <StatusMessage message="Checking authentication…" />
+  }
+
+  if (auth.status === 'unauthenticated') {
+    return (
+      <div>
+        <p className="intro">Sign in to create a stream session.</p>
+        <LoginForm />
+      </div>
+    )
+  }
 
   return (
     <div>
