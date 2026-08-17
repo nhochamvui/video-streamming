@@ -38,10 +38,10 @@ public class StreamSessionService {
     public CreateStreamSessionResponse create(StreamSessionCreateRequest request) {
         String requestedIp = request.requestedIp() == null ? "unknown" : request.requestedIp();
         if (repository.countByRequestedIpAndStatus(requestedIp, StreamSessionStatus.PENDING) >= maxPendingPerIp) {
-//            throw new StreamSessionLimitExceeded("Too many pending stream sessions for this IP");
+            throw new StreamSessionLimitExceeded("Too many pending stream sessions for this IP");
         }
         if (repository.countByRequestedIpAndStatus(requestedIp, StreamSessionStatus.ACTIVE) >= maxActivePerIp) {
-//            throw new StreamSessionLimitExceeded("Too many active streams for this IP");
+            throw new StreamSessionLimitExceeded("Too many active streams for this IP");
         }
 
         IngestNode node = nodeRegistry.selectLeastLoadedNode()

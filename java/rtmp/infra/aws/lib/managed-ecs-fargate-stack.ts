@@ -156,7 +156,10 @@ export function createManagedInfra(scope: Construct, config: InfraConfig): Manag
   storage.bucket.grantReadWrite(taskRole);
   executionRole.addToPolicy(new PolicyStatement({
     actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-    resources: [`arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`]
+    resources: [
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`,
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/auth-password`
+    ]
   }));
 
   new cdk.CfnOutput(scope, 'PlaybackBaseUrl', { value: `http://${config.rtmpHost}` });
@@ -206,6 +209,10 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
     parameterName: refs.hmacSecretName,
     simpleName: false
   });
+  const authPasswordParameter = StringParameter.fromStringParameterAttributes(scope, 'AuthPasswordParameter', {
+    parameterName: '/rtmp/demo/auth-password',
+    simpleName: false
+  });
   const serviceSecurityGroup = SecurityGroup.fromSecurityGroupId(scope, 'ServiceSecurityGroup', refs.serviceSecurityGroupId);
 
   const advertisedRtmpHost = config.enableNlb ? refs.nlbDnsName : config.rtmpHost;
@@ -221,7 +228,8 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
   const appContainer = taskDefinition.addContainer('rtmp-app', {
     image: ContainerImage.fromRegistry(config.appImage),
     secrets: {
-      RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter)
+      RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
+      RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter)
     },
     environment: {
       REDIS_URI: refs.redisUri,
@@ -232,7 +240,8 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
       RTMP_HLS_CDN_URL: `https://${refs.distributionDomainName}`,
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
-      RTMP_HLS_REGION: Stack.of(scope).region
+      RTMP_HLS_REGION: Stack.of(scope).region,
+      RTMP_AUTH_USERNAME: config.rtmpAuthUsername
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });

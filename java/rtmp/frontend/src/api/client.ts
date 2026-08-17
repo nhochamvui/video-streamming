@@ -9,7 +9,7 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
+  const response = await fetch(url, { credentials: 'same-origin', ...init })
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const message =

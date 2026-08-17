@@ -16,6 +16,7 @@ export interface InfraConfig {
   readonly adminCidr: string;
   readonly netdataCidr: string;
   readonly rtmpHost: string;
+  readonly rtmpAuthUsername: string;
 }
 
 export function getConfig(app: cdk.App): InfraConfig {
@@ -40,7 +41,8 @@ export function getConfig(app: cdk.App): InfraConfig {
     enableElastiCache: readBoolean(app, 'enableElastiCache', false),
     adminCidr: readString(app, 'adminCidr', '0.0.0.0/0'),
     netdataCidr: readString(app, 'netdataCidr', '42.117.146.241/32'),
-    rtmpHost: readString(app, 'rtmpHost', 'replace-after-deploy.example.com')
+    rtmpHost: readString(app, 'rtmpHost', 'replace-after-deploy.example.com'),
+    rtmpAuthUsername: readString(app, 'rtmpAuthUsername', 'admin')
   };
 }
 

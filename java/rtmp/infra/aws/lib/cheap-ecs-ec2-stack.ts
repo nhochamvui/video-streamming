@@ -138,7 +138,10 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   storage.bucket.grantReadWrite(taskRole);
   executionRole.addToPolicy(new PolicyStatement({
     actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-    resources: [`arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`]
+    resources: [
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`,
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/auth-password`
+    ]
   }));
 
   const proxyRole = new Role(scope, 'ProxyInstanceRole', {
@@ -307,6 +310,10 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     parameterName: refs.hmacSecretName,
     simpleName: false
   });
+  const authPasswordParameter = StringParameter.fromStringParameterAttributes(scope, 'AuthPasswordParameter', {
+    parameterName: '/rtmp/demo/auth-password',
+    simpleName: false
+  });
 
   const taskDefinition = new Ec2TaskDefinition(scope, 'AppTask', {
     networkMode: NetworkMode.HOST,
@@ -319,7 +326,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     memoryReservationMiB: 384,
     memoryLimitMiB: 640,
     secrets: {
-      RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter)
+      RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
+      RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter)
     },
     environment: {
       MICRONAUT_SERVER_PORT: '8888',
@@ -331,7 +339,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_HLS_CDN_URL: `https://${refs.distributionDomainName}`,
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
-      RTMP_HLS_REGION: Stack.of(scope).region
+      RTMP_HLS_REGION: Stack.of(scope).region,
+      RTMP_AUTH_USERNAME: config.rtmpAuthUsername
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });
