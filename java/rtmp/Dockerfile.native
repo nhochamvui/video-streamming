@@ -20,6 +20,7 @@ RUN --mount=type=cache,target=/root/.gradle \
     ./gradlew nativeCompile -PskipFrontendBuild --no-daemon
 
 FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/hls
 WORKDIR /app
 COPY --from=native-builder /build/build/native/nativeCompile/rtmp /app/rtmp
