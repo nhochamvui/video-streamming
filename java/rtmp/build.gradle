@@ -92,6 +92,7 @@ graalvmNative.binaries.main {
     buildArgs.addAll(
         "--report-unsupported-elements-at-runtime",
         "--no-fallback",
+        "-H:IncludeResources=static/index.html",
         nativeImageMemory
     )
 }

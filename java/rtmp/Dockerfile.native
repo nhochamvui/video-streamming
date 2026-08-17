@@ -24,6 +24,8 @@ RUN mkdir -p /app/hls
 WORKDIR /app
 COPY --from=native-builder /build/build/native/nativeCompile/rtmp /app/rtmp
 COPY --from=go-builder /out/hls-segmenter /usr/local/bin/hls-segmenter
+COPY --from=frontend /dist /app/static
+ENV RTMP_STATIC_DIR=file:/app/static
 RUN chmod +x /app/rtmp /usr/local/bin/hls-segmenter
 EXPOSE 8888 1935
 ENTRYPOINT ["/app/rtmp"]
